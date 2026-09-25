@@ -18,6 +18,7 @@ from PIL import Image, UnidentifiedImageError
 from app.config import config
 from app.models.schema import MaterialInfo, VideoAspect, VideoConcatMode
 from app.services import (
+    comfyui,
     material_cache,
     metaso_minimax,
     ofox,
@@ -610,6 +611,22 @@ def search_videos_coverr(
                 },
             }
             video_items.append(item)
+
+        if not video_items and " " in search_term:
+            for word in search_term.split():
+                clean_word = word.strip().strip(",.?!;:\"'")
+                if len(clean_word) > 2:
+                    fallback_items = search_videos_coverr(
+                        clean_word,
+                        minimum_duration=minimum_duration,
+                        video_aspect=video_aspect,
+                    )
+                    for fb in fallback_items:
+                        if not any(x.url == fb.url for x in video_items):
+                            video_items.append(fb)
+                    if len(video_items) >= 5:
+                        break
+
         return video_items
     except Exception as e:
         logger.error(
@@ -1753,6 +1770,15 @@ def download_videos(
             max_clip_duration=max_clip_duration,
             material_directory=material_directory,
         )
+    if source in ("comfyui", "comfyui_wan"):
+        return _download_videos_comfyui_on_demand(
+            task_id=task_id,
+            search_terms=search_terms,
+            video_aspect=video_aspect,
+            audio_duration=audio_duration,
+            max_clip_duration=max_clip_duration,
+            material_directory=material_directory,
+        )
 
     if match_script_order:
         return _download_videos_by_script_order(
@@ -2236,6 +2262,93 @@ def _download_videos_metaso_minimax_on_demand(
             break
 
     logger.success(f"generated and downloaded {len(video_paths)} Metaso MiniMax videos")
+    _persist_material_sources(task_id, material_sources)
+    return video_paths
+
+
+def _download_videos_comfyui_on_demand(
+    *,
+    task_id: str,
+    search_terms: List[str],
+    video_aspect: VideoAspect,
+    audio_duration: float,
+    max_clip_duration: int,
+    material_directory: str,
+) -> List[str]:
+    """顺序调用本地 ComfyUI Wan 2.1 生成视频素材，覆盖配音时长后停止。"""
+    video_paths: List[str] = []
+    material_sources: list[dict[str, Any]] = []
+
+    try:
+        required_duration = float(audio_duration)
+    except (TypeError, ValueError) as exc:
+        raise comfyui.ComfyUIError(
+            "ComfyUI audio duration must be a finite number"
+        ) from exc
+    if not math.isfinite(required_duration):
+        raise comfyui.ComfyUIError(
+            "ComfyUI audio duration must be a finite number"
+        )
+    if required_duration <= 0:
+        logger.warning(
+            "skip ComfyUI video generation because required audio duration "
+            f"is not positive: duration={required_duration}"
+        )
+        _persist_material_sources(task_id, material_sources)
+        return video_paths
+
+    try:
+        clip_duration = int(max_clip_duration)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise comfyui.ComfyUIError(
+            "ComfyUI clip duration must be a positive integer"
+        ) from exc
+    if clip_duration <= 0:
+        raise comfyui.ComfyUIError(
+            "ComfyUI clip duration must be a positive integer"
+        )
+
+    total_duration = 0.0
+    for search_term in search_terms:
+        try:
+            saved_video_path, gen_dur = comfyui.generate_video(
+                search_term=search_term,
+                video_aspect=video_aspect,
+                duration=clip_duration,
+                save_dir=material_directory,
+            )
+        except Exception as exc:
+            logger.error(f"ComfyUI Wan 2.1 video generation failed for {search_term!r}: {exc}")
+            _persist_material_sources(task_id, material_sources)
+            raise
+
+        if saved_video_path and os.path.exists(saved_video_path):
+            video_paths.append(saved_video_path)
+            item = MaterialInfo(
+                provider="comfyui_wan",
+                url=saved_video_path,
+                duration=gen_dur,
+                source_info={
+                    "provider": "comfyui_wan",
+                    "search_term": search_term,
+                },
+            )
+            try:
+                material_sources.append(_material_source_record(item, saved_video_path))
+            except Exception as source_error:
+                logger.warning(
+                    f"failed to prepare comfyui material source record: {source_error}"
+                )
+
+            total_duration += min(clip_duration, gen_dur)
+            if total_duration >= required_duration:
+                logger.info(
+                    "generated ComfyUI Wan 2.1 materials cover the required duration: "
+                    f"generated={total_duration:.1f}s, required={required_duration:.1f}s"
+                )
+                break
+
+    logger.success(f"generated {len(video_paths)} ComfyUI Wan 2.1 videos")
     _persist_material_sources(task_id, material_sources)
     return video_paths
 

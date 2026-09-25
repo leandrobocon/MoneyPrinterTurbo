@@ -46,6 +46,7 @@ from app.models.schema import (
 from app.services import bgm as bgm_service
 from app.services import (
     cache_manager,
+    comfyui,
     llm,
     loomloom,
     material,
@@ -114,6 +115,7 @@ LOOMLOOM_MAX_POLL_FAILURES = 5
 VIDEO_SOURCE_GROUPS = {
     "stock_video": ("pexels", "pixabay", "coverr"),
     "ai_video": (
+        "comfyui_wan",
         "metaso_minimax",
         "loomloom",
         "volcengine_seedance",
@@ -3817,6 +3819,48 @@ def _render_settings_dialog():
                         openai_image_prompt_template.strip(),
                     )
 
+                st.markdown("---")
+                st.markdown(f"**{tr('ComfyUI Wan 2.1 Video Settings') if tr('ComfyUI Wan 2.1 Video Settings') != 'ComfyUI Wan 2.1 Video Settings' else 'ComfyUI (Wan 2.1 Text-to-Video)'}**")
+                comfyui_base_url = st.text_input(
+                    "ComfyUI Base URL",
+                    value=str(config.app.get("comfyui_base_url", "http://127.0.0.1:8188") or "http://127.0.0.1:8188"),
+                    placeholder="http://127.0.0.1:8188",
+                    key="comfyui_base_url_input",
+                )
+                _set_runtime_config("app", "comfyui_base_url", comfyui_base_url.strip())
+
+                comfyui_wan_model = st.text_input(
+                    "Wan 2.1 Model",
+                    value=str(config.app.get("comfyui_wan_model", "wan2.1_t2v_1.3B_bf16.safetensors") or "wan2.1_t2v_1.3B_bf16.safetensors"),
+                    placeholder="wan2.1_t2v_1.3B_bf16.safetensors",
+                    key="comfyui_wan_model_input",
+                )
+                _set_runtime_config("app", "comfyui_wan_model", comfyui_wan_model.strip())
+
+                comfyui_steps = st.number_input(
+                    "Steps (Passos)",
+                    value=int(config.app.get("comfyui_steps", 8)),
+                    min_value=1,
+                    max_value=100,
+                    step=1,
+                    key="comfyui_steps_input",
+                )
+                _set_runtime_config("app", "comfyui_steps", int(comfyui_steps))
+
+                comfyui_prompt_template = st.text_area(
+                    "Prompt Template (Positivo)",
+                    value=str(config.app.get("comfyui_prompt_template", "{term}, photorealistic, raw footage, National Geographic wildlife documentary, ultra-realistic textures, natural daylight, sharp focus, 8k uhd")),
+                    key="comfyui_prompt_template_input",
+                )
+                _set_runtime_config("app", "comfyui_prompt_template", comfyui_prompt_template.strip())
+
+                comfyui_negative_prompt = st.text_area(
+                    "Negative Prompt (Negativo)",
+                    value=str(config.app.get("comfyui_negative_prompt", "cgi, 3d render, illustration, cartoon, anime, drawing, painting, stylized, artificial, plastic, fake, low quality, worst quality, blurry, distorted, deformation, static, artifacts")),
+                    key="comfyui_negative_prompt_input",
+                )
+                _set_runtime_config("app", "comfyui_negative_prompt", comfyui_negative_prompt.strip())
+
     _save_runtime_config()
 
 
@@ -4918,6 +4962,7 @@ def _render_video_settings(panel, params):
                 (tr("Random"), "random"),
             ]
             video_source_labels = {
+                "comfyui_wan": tr("ComfyUI (Wan 2.1 Video)"),
                 "pexels": tr("Pexels"),
                 "pixabay": tr("Pixabay"),
                 "coverr": tr("Coverr"),
@@ -4956,6 +5001,24 @@ def _render_video_settings(panel, params):
                     _effective_loomloom_api_token()
                 )
 
+            if params.video_source == "comfyui_wan":
+                current_wan_model = str(config.app.get("comfyui_wan_model", "wan2.1_t2v_14B_fp8_e4m3fn.safetensors") or "wan2.1_t2v_14B_fp8_e4m3fn.safetensors")
+                wan_options = [
+                    ("wan2.1_t2v_14B_fp8_e4m3fn.safetensors", "Wan 2.1 14B (Alta Qualidade / Mais Lento)"),
+                    ("wan2.1_t2v_1.3B_bf16.safetensors", "Wan 2.1 1.3B (Rápido / Leve)"),
+                ]
+                wan_model_idx = 0 if "14B" in current_wan_model else 1
+                selected_wan_model = st.selectbox(
+                    "Modelo Wan 2.1",
+                    options=[opt[0] for opt in wan_options],
+                    index=wan_model_idx,
+                    format_func=lambda x: dict(wan_options).get(x, x),
+                    key="comfyui_wan_model_quick_select",
+                )
+                _set_runtime_config("app", "comfyui_wan_model", selected_wan_model)
+                st.caption("Gera clipes de vídeo no ComfyUI local via Wan 2.1 Text-to-Video.")
+            if params.video_source == "openai_image":
+                st.caption(tr("OpenAI Image Help"))
             if params.video_source == "wavespeed":
                 st.caption(tr("WaveSpeed AI Video Help"))
             if params.video_source == "volcengine_seedance":
@@ -7219,6 +7282,7 @@ def _render_generation_controls(
             st.stop()
 
         if params.video_source not in [
+            "comfyui_wan",
             "pexels",
             "pixabay",
             "coverr",
@@ -7232,6 +7296,13 @@ def _render_generation_controls(
         ]:
             _remove_active_generation_task(task_id)
             st.error(tr("Please Select a Valid Video Source"))
+            st.stop()
+
+        if params.video_source in ("comfyui", "comfyui_wan") and not (
+            comfyui.is_enabled(config.snapshot_config_with_pending(config.app))
+        ):
+            _remove_active_generation_task(task_id)
+            st.error("Please configure the ComfyUI Base URL (e.g. http://127.0.0.1:8188)")
             st.stop()
 
         if params.video_source == "pexels" and not config.app.get(
