@@ -17,6 +17,7 @@ from app.models import const
 from app.models.schema import VideoConcatMode, VideoParams
 from app.services import bgm as bgm_service
 from app.services import (
+    comfyui,
     elevenlabs_music,
     llm,
     loomloom,
@@ -1444,6 +1445,19 @@ def _run_pipeline(
             "OpenAI image source requires openai_image_base_url and "
             "openai_image_model in config.toml (openai_image_api_keys is "
             "optional for local gateways that need no auth)",
+        )
+
+    if (
+        stop_at in {"materials", "video"}
+        and params.video_source in {"comfyui", "comfyui_wan"}
+        and not comfyui.is_enabled(
+            config.snapshot_config_with_pending(config.app)
+        )
+    ):
+        return _mark_task_failed(
+            task_id,
+            "preflight",
+            "ComfyUI requires comfyui_base_url in config.toml",
         )
 
     # 只有完整成片流程需要视频配乐供应商。尽早阻止缺少 Key 的完整任务，避免

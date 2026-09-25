@@ -873,9 +873,9 @@ def generate_terms(
 
 ## Constrains:
 1. the search terms are to be returned as a json-array of strings.
-2. each search term should consist of 1-3 words, always add the main subject of the video.
+2. each search term should be a specific, detailed visual scene description suitable for photorealistic video generation (describing realistic subjects, natural physical movements, camera perspective, authentic lighting and environmental settings). Focus on photorealistic and real-life documentary descriptions. Avoid generic, vague, cartoonish, or stylized descriptions.
 3. you must only return the json-array of strings. you must not return anything else. you must not return the script.
-4. the search terms must be related to the subject of the video.
+4. the search terms must be related to the subject and scenes of the video.
 5. reply with english search terms only.
 {ordering_rule}
 
