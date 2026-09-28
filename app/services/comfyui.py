@@ -254,6 +254,91 @@ def build_wan_workflow(
     }
 
 
+def build_qwen_image_workflow(
+    positive_prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    steps: int,
+    cfg: float,
+    seed: int,
+) -> dict[str, Any]:
+    """Constructs the prompt graph for ComfyUI Qwen Image 2.1 / Z-Image Text-to-Image."""
+    return {
+        "1": {
+            "inputs": {
+                "unet_name": str(config.app.get("comfyui_qwen_model", "z_image_turbo_bf16.safetensors") or "z_image_turbo_bf16.safetensors").strip(),
+                "weight_dtype": "default",
+            },
+            "class_type": "UNETLoader",
+        },
+        "2": {
+            "inputs": {
+                "clip_name": str(config.app.get("comfyui_qwen_clip", "qwen_2.5_vl_7b_fp8_scaled.safetensors") or "qwen_2.5_vl_7b_fp8_scaled.safetensors").strip(),
+                "type": "sdxl",
+            },
+            "class_type": "CLIPLoader",
+        },
+        "3": {
+            "inputs": {
+                "vae_name": str(config.app.get("comfyui_qwen_vae", "qwen_image_vae.safetensors") or "qwen_image_vae.safetensors").strip(),
+            },
+            "class_type": "VAELoader",
+        },
+        "4": {
+            "inputs": {
+                "clip": ["2", 0],
+                "text": positive_prompt,
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "5": {
+            "inputs": {
+                "clip": ["2", 0],
+                "text": negative_prompt,
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "6": {
+            "inputs": {
+                "width": width,
+                "height": height,
+                "batch_size": 1,
+            },
+            "class_type": "EmptyLatentImage",
+        },
+        "7": {
+            "inputs": {
+                "model": ["1", 0],
+                "positive": ["4", 0],
+                "negative": ["5", 0],
+                "latent_image": ["6", 0],
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": _sampler(),
+                "scheduler": _scheduler(),
+                "denoise": 1.0,
+            },
+            "class_type": "KSampler",
+        },
+        "8": {
+            "inputs": {
+                "samples": ["7", 0],
+                "vae": ["3", 0],
+            },
+            "class_type": "VAEDecode",
+        },
+        "9": {
+            "inputs": {
+                "filename_prefix": "MPT_QWEN_IMG",
+                "images": ["8", 0],
+            },
+            "class_type": "SaveImage",
+        },
+    }
+
+
 def generate_video(
     search_term: str,
     video_aspect: VideoAspect,

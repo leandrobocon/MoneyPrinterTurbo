@@ -135,7 +135,10 @@ VIDEO_SOURCE_GROUPS = {
         "wavespeed",
         "muapi",
     ),
-    "ai_image": ("openai_image",),
+    "ai_image": (
+        "drawthings",
+        "openai_image",
+    ),
     "local": ("local",),
 }
 # Upload-Post 的 API Key 与发布用户分别在两个页面管理，并且发布用户名称
@@ -3989,7 +3992,39 @@ def _render_settings_dialog():
                     )
 
                 st.markdown("---")
-                st.markdown(f"**{tr('ComfyUI Wan 2.1 Video Settings') if tr('ComfyUI Wan 2.1 Video Settings') != 'ComfyUI Wan 2.1 Video Settings' else 'ComfyUI (Wan 2.1 Text-to-Video)'}**")
+                st.markdown(f"**{tr('Draw Things Settings') if tr('Draw Things Settings') != 'Draw Things Settings' else 'Draw Things (Local Mac / Metal)'}**")
+                st.caption(
+                    tr("Draw Things Setup Instructions")
+                    if tr("Draw Things Setup Instructions") != "Draw Things Setup Instructions"
+                    else "Para usar o Draw Things localmente: Abra o Draw Things no seu Mac -> Configurações (⚙️) -> Role até 'API Server' -> Ative 'Enable API Server' (Porta 7860)."
+                )
+                drawthings_base_url = st.text_input(
+                    "Draw Things Base URL",
+                    value=str(config.app.get("drawthings_base_url", "http://127.0.0.1:7860/v1") or "http://127.0.0.1:7860/v1"),
+                    placeholder="http://127.0.0.1:7860/v1",
+                    key="drawthings_base_url_input",
+                )
+                _set_runtime_config("app", "drawthings_base_url", drawthings_base_url.strip())
+
+                drawthings_model = st.text_input(
+                    "Draw Things Model",
+                    value=str(config.app.get("drawthings_model", "Qwen Image 2.1") or "Qwen Image 2.1"),
+                    placeholder="Qwen Image 2.1",
+                    help="Nome do modelo ativo no Draw Things (ex: Qwen Image 2.1, Wan 2.1, FLUX.1 Schnell, SDXL)",
+                    key="drawthings_model_input",
+                )
+                _set_runtime_config("app", "drawthings_model", drawthings_model.strip())
+
+                drawthings_prompt_template = st.text_input(
+                    "Draw Things Prompt Template",
+                    value=str(config.app.get("drawthings_prompt_template", "{term}, high quality, detailed, photorealistic") or "{term}, high quality, detailed, photorealistic"),
+                    placeholder="{term}, high quality, detailed, photorealistic",
+                    key="drawthings_prompt_template_input",
+                )
+                _set_runtime_config("app", "drawthings_prompt_template", drawthings_prompt_template.strip())
+
+                st.markdown("---")
+                st.markdown(f"**{tr('ComfyUI Wan 2.1 Video Settings') if tr('ComfyUI Wan 2.1 Video Settings') != 'ComfyUI Wan 2.1 Video Settings' else 'ComfyUI (Wan 2.1 Video / Qwen Image 2.1)'}**")
                 comfyui_base_url = st.text_input(
                     "ComfyUI Base URL",
                     value=str(config.app.get("comfyui_base_url", "http://127.0.0.1:8188") or "http://127.0.0.1:8188"),
@@ -3999,12 +4034,20 @@ def _render_settings_dialog():
                 _set_runtime_config("app", "comfyui_base_url", comfyui_base_url.strip())
 
                 comfyui_wan_model = st.text_input(
-                    "Wan 2.1 Model",
+                    "Wan 2.1 Model (Vídeo Direto)",
                     value=str(config.app.get("comfyui_wan_model", "wan2.1_t2v_1.3B_bf16.safetensors") or "wan2.1_t2v_1.3B_bf16.safetensors"),
                     placeholder="wan2.1_t2v_1.3B_bf16.safetensors",
                     key="comfyui_wan_model_input",
                 )
                 _set_runtime_config("app", "comfyui_wan_model", comfyui_wan_model.strip())
+
+                comfyui_qwen_model = st.text_input(
+                    "Qwen Image Model (ComfyUI Bridge)",
+                    value=str(config.app.get("comfyui_qwen_model", "z_image_turbo_bf16.safetensors") or "z_image_turbo_bf16.safetensors"),
+                    placeholder="z_image_turbo_bf16.safetensors",
+                    key="comfyui_qwen_model_input",
+                )
+                _set_runtime_config("app", "comfyui_qwen_model", comfyui_qwen_model.strip())
 
                 comfyui_steps = st.number_input(
                     "Steps (Passos)",
@@ -5132,6 +5175,8 @@ def _render_video_settings(panel, params):
             ]
             video_source_labels = {
                 "comfyui_wan": tr("ComfyUI (Wan 2.1 Video)"),
+                "drawthings": tr("Draw Things (Local Mac)"),
+                "openai_image": tr("OpenAI Compatible Text-to-Image"),
                 "pexels": tr("Pexels"),
                 "pixabay": tr("Pixabay"),
                 "coverr": tr("Coverr"),
@@ -5141,7 +5186,6 @@ def _render_video_settings(panel, params):
                 "metaso_minimax": tr("Metaso MiniMax H3"),
                 "muapi": tr("MuAPI AI Video"),
                 "loomloom": tr("Shengsuan Cloud AI Video"),
-                "openai_image": tr("OpenAI Compatible Text-to-Image"),
                 "local": tr("Local file"),
             }
             saved_video_source_name = str(
@@ -5187,7 +5231,50 @@ def _render_video_settings(panel, params):
                 )
                 _set_runtime_config("app", "comfyui_wan_model", selected_wan_model)
                 st.caption("Gera clipes de vídeo no ComfyUI local via Wan 2.1 Text-to-Video.")
+
+            if params.video_source == "drawthings":
+                dt_models = [
+                    ("Qwen Image 2.1", "Qwen Image 2.1 (Recomendado)"),
+                    ("Wan 2.1 T2I", "Wan 2.1 T2I"),
+                    ("FLUX.1 Schnell", "FLUX.1 Schnell"),
+                    ("SDXL 1.0", "SDXL 1.0"),
+                ]
+                current_dt_model = str(config.app.get("drawthings_model", "Qwen Image 2.1") or "Qwen Image 2.1")
+                dt_idx = 0
+                for idx, (m_val, _) in enumerate(dt_models):
+                    if m_val.lower() in current_dt_model.lower():
+                        dt_idx = idx
+                        break
+                selected_dt_model = st.selectbox(
+                    "Modelo Draw Things",
+                    options=[opt[0] for opt in dt_models],
+                    index=dt_idx,
+                    format_func=lambda x: dict(dt_models).get(x, x),
+                    key="drawthings_model_quick_select",
+                )
+                _set_runtime_config("app", "drawthings_model", selected_dt_model)
+                st.caption(tr("Draw Things Help"))
+
             if params.video_source == "openai_image":
+                current_oai_model = str(config.app.get("openai_image_model", "qwen-image-2.1") or "qwen-image-2.1")
+                oai_models = [
+                    ("qwen-image-2.1", "Qwen Image 2.1 (ComfyUI Local)"),
+                    ("flux1-schnell", "FLUX.1 Schnell (ComfyUI Local)"),
+                    ("dall-e-3", "DALL-E 3 (OpenAI Cloud)"),
+                ]
+                oai_idx = 0
+                for idx, (m_val, _) in enumerate(oai_models):
+                    if m_val.lower() == current_oai_model.lower():
+                        oai_idx = idx
+                        break
+                selected_oai_model = st.selectbox(
+                    "Modelo de Imagem",
+                    options=[opt[0] for opt in oai_models],
+                    index=oai_idx,
+                    format_func=lambda x: dict(oai_models).get(x, x),
+                    key="openai_image_model_quick_select",
+                )
+                _set_runtime_config("app", "openai_image_model", selected_oai_model)
                 st.caption(tr("OpenAI Image Help"))
             if params.video_source == "wavespeed":
                 st.caption(tr("WaveSpeed AI Video Help"))
@@ -7936,6 +8023,7 @@ def _render_generation_controls(
 
         if params.video_source not in [
             "comfyui_wan",
+            "drawthings",
             "pexels",
             "pixabay",
             "coverr",
@@ -7957,6 +8045,13 @@ def _render_generation_controls(
         ):
             _remove_active_generation_task(task_id)
             st.error("Please configure the ComfyUI Base URL (e.g. http://127.0.0.1:8188)")
+            st.stop()
+
+        if params.video_source in ("drawthings", "draw_things") and not (
+            material.is_drawthings_enabled(config.snapshot_config_with_pending(config.app))
+        ):
+            _remove_active_generation_task(task_id)
+            st.error("Please configure the Draw Things Base URL (e.g. http://127.0.0.1:7860/v1)")
             st.stop()
 
         if params.video_source == "pexels" and not config.app.get(

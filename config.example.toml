@@ -207,12 +207,13 @@ openai_image_size = ""
 # Example: "cinematic photo of {term}, photorealistic, high detail"
 openai_image_prompt_template = ""
 
-# ComfyUI local Wan 2.1 Text-to-Video material source ("comfyui_wan").
-# Points directly to a local or remote ComfyUI instance running Wan 2.1 Text-to-Video.
-# Video clips are generated on-demand frame-by-frame and stitched into the final video.
-# Default ComfyUI URL is http://127.0.0.1:8188.
+# ComfyUI local material source ("comfyui_wan" / "comfyui_image").
+# Points directly to a local or remote ComfyUI instance (default: http://127.0.0.1:8188).
 comfyui_base_url = "http://127.0.0.1:8188"
 comfyui_wan_model = "wan2.1_t2v_1.3B_bf16.safetensors"
+comfyui_qwen_model = "z_image_turbo_bf16.safetensors"
+comfyui_qwen_clip = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+comfyui_qwen_vae = "qwen_image_vae.safetensors"
 comfyui_clip_name = "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
 comfyui_vae_name = "wan_2.1_vae.safetensors"
 comfyui_steps = 20
@@ -220,6 +221,13 @@ comfyui_cfg = 6.0
 comfyui_fps = 16
 comfyui_prompt_template = "{term}, high quality, cinematic"
 comfyui_negative_prompt = "low quality, worst quality, blurry, distorted, deformation, static, artifacts"
+
+# Draw Things local material source ("drawthings").
+# Connects to Draw Things running on macOS with "API Server" enabled (Settings -> API Server -> On).
+# Supports Qwen Image 2.1, Wan 2.1, FLUX.1, SDXL and any locally loaded model.
+drawthings_base_url = "http://127.0.0.1:7860/v1"
+drawthings_model = "Qwen Image 2.1"
+drawthings_prompt_template = "{term}, high quality, detailed, photorealistic"
 
 # Optional TwelveLabs integration for semantic material ranking and video QA.
 # Install the optional dependency with: uv sync --extra twelvelabs

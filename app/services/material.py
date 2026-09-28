@@ -1607,6 +1607,156 @@ def _download_videos_openai_image_on_demand(
     return video_paths
 
 
+DEFAULT_DRAWTHINGS_BASE_URL = "http://127.0.0.1:7860/v1"
+DEFAULT_DRAWTHINGS_MODEL = "Qwen Image 2.1"
+
+
+def is_drawthings_enabled(app_config: dict | None = None) -> bool:
+    """Check if Draw Things service is configured or available."""
+    app_config = config.app if app_config is None else app_config
+    base_url = str(app_config.get("drawthings_base_url", DEFAULT_DRAWTHINGS_BASE_URL) or "").strip()
+    return bool(base_url)
+
+
+def _drawthings_endpoint() -> tuple[str, str]:
+    base_url = (
+        str(config.app.get("drawthings_base_url", DEFAULT_DRAWTHINGS_BASE_URL) or DEFAULT_DRAWTHINGS_BASE_URL)
+        .strip()
+        .rstrip("/")
+    )
+    model = str(config.app.get("drawthings_model", DEFAULT_DRAWTHINGS_MODEL) or DEFAULT_DRAWTHINGS_MODEL).strip()
+    if not base_url.endswith("/v1"):
+        endpoint = f"{base_url}/v1/{OPENAI_IMAGE_ENDPOINT_PATH}"
+    else:
+        endpoint = f"{base_url}/{OPENAI_IMAGE_ENDPOINT_PATH}"
+    return endpoint, model
+
+
+def _drawthings_prompt(search_term: str) -> str:
+    template = str(config.app.get("drawthings_prompt_template", "") or "").strip()
+    if not template:
+        template = "{term}, high quality, detailed, photorealistic"
+    if "{term}" in template:
+        return template.replace("{term}", search_term)
+    return f"{search_term}, {template}"
+
+
+def generate_images_drawthings(
+    search_term: str,
+    minimum_duration: int = 5,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    save_dir: str = "",
+) -> List[MaterialInfo]:
+    aspect = VideoAspect(video_aspect)
+    clip_duration = max(int(minimum_duration), 1)
+    endpoint, model = _drawthings_endpoint()
+    image_size = _openai_image_size(aspect)
+    payload = {
+        "model": model,
+        "prompt": _drawthings_prompt(search_term),
+        "n": 1,
+        "size": image_size,
+    }
+    logger.info(
+        f"generating image via Draw Things endpoint: model={model}, "
+        f"term={search_term!r}, size={image_size}"
+    )
+    image_bytes, failure_detail = _request_openai_image(endpoint, payload)
+    if image_bytes is None:
+        logger.error(
+            f"drawthings image generation failed: term={search_term!r}, "
+            f"detail={failure_detail}"
+        )
+        return []
+
+    try:
+        image_path, width, height = _save_openai_image_file(image_bytes, save_dir)
+    except _OpenAIImageDecodeError as e:
+        logger.error(
+            "drawthings image response is not a decodable image, skipping term: "
+            f"term={search_term!r}, error={type(e).__name__}, detail={e}"
+        )
+        return []
+    item = MaterialInfo()
+    item.provider = "drawthings"
+    item.url = image_path
+    item.duration = clip_duration
+    item.source_info = {
+        "provider": "drawthings",
+        "search_term": search_term,
+        "rendition": {
+            "id": None,
+            "width": width,
+            "height": height,
+        },
+    }
+    return [item]
+
+
+def _download_videos_drawthings_on_demand(
+    *,
+    task_id: str,
+    search_terms: List[str],
+    video_aspect: VideoAspect,
+    audio_duration: float,
+    max_clip_duration: int,
+    material_directory: str,
+) -> List[str]:
+    if not material_directory:
+        material_directory = utils.task_dir(task_id)
+
+    video_paths: List[str] = []
+    material_sources: list[dict[str, Any]] = []
+    total_duration = 0.0
+
+    try:
+        required_duration = float(audio_duration)
+    except (TypeError, ValueError):
+        required_duration = 0.0
+    if required_duration <= 0:
+        logger.warning(
+            "skip drawthings image generation because required audio duration is "
+            f"not positive: duration={audio_duration}"
+        )
+        _persist_material_sources(task_id, material_sources)
+        return video_paths
+
+    for search_term in search_terms:
+        items = generate_images_drawthings(
+            search_term=search_term,
+            minimum_duration=max_clip_duration,
+            video_aspect=video_aspect,
+            save_dir=material_directory,
+        )
+        for item in items:
+            video_file = _render_openai_image_video(item.url, max_clip_duration)
+            if not video_file:
+                continue
+            logger.info(f"drawthings image material rendered: {video_file}")
+            video_paths.append(video_file)
+            try:
+                material_sources.append(_material_source_record(item, video_file))
+            except Exception as source_error:
+                logger.warning(
+                    "failed to prepare drawthings material source record: "
+                    f"error={type(source_error).__name__}, detail={source_error}"
+                )
+            total_duration += min(max_clip_duration, item.duration)
+            if total_duration >= required_duration:
+                break
+        if total_duration >= required_duration:
+            logger.info(
+                "generated drawthings image materials cover the required duration, stop "
+                f"generating more images: generated={total_duration:.1f}s, "
+                f"required={required_duration:.1f}s"
+            )
+            break
+
+    logger.success(f"generated and rendered {len(video_paths)} drawthings image materials")
+    _persist_material_sources(task_id, material_sources)
+    return video_paths
+
+
 def _search_videos_with_cache(
     provider: str,
     search_videos: Callable[..., List[MaterialInfo]],
@@ -1811,6 +1961,15 @@ def download_videos(
         )
     if source in ("comfyui", "comfyui_wan"):
         return _download_videos_comfyui_on_demand(
+            task_id=task_id,
+            search_terms=search_terms,
+            video_aspect=video_aspect,
+            audio_duration=audio_duration,
+            max_clip_duration=max_clip_duration,
+            material_directory=material_directory,
+        )
+    if source in ("drawthings", "draw_things"):
+        return _download_videos_drawthings_on_demand(
             task_id=task_id,
             search_terms=search_terms,
             video_aspect=video_aspect,

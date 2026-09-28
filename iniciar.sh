@@ -18,8 +18,8 @@ fi
 
 # 2. Verifica/Inicia a Bridge de Automação (porta 8000)
 if ! lsof -i :8000 >/dev/null 2>&1; then
-    echo "⚙️  Iniciando Bridge do ComfyUI em segundo plano..."
-    /Users/leandrobocon/ComfyUI-Installs/ComfyUI/ComfyUI/.venv/bin/python /Users/leandrobocon/.gemini/antigravity-cli/brain/51b959b3-0fa2-4e9f-8cc9-2e958666e42a/scratch/comfy_openai_bridge.py > /dev/null 2>&1 &
+    echo "⚙️  Iniciando Bridge do ComfyUI (Qwen Image 2.1 / FLUX) em segundo plano..."
+    /Users/leandrobocon/ComfyUI-Installs/ComfyUI/ComfyUI/.venv/bin/python "$DIR/scripts/comfy_openai_bridge.py" > /dev/null 2>&1 &
     sleep 1
 else
     echo "✅ Bridge do ComfyUI já está ativa (porta 8000)."

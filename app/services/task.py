@@ -1460,6 +1460,19 @@ def _run_pipeline(
             "ComfyUI requires comfyui_base_url in config.toml",
         )
 
+    if (
+        stop_at in {"materials", "video"}
+        and params.video_source in {"drawthings", "draw_things"}
+        and not material.is_drawthings_enabled(
+            config.snapshot_config_with_pending(config.app)
+        )
+    ):
+        return _mark_task_failed(
+            task_id,
+            "preflight",
+            "Draw Things requires drawthings_base_url in config.toml (e.g. http://127.0.0.1:7860/v1)",
+        )
+
     # 只有完整成片流程需要视频配乐供应商。尽早阻止缺少 Key 的完整任务，避免
     # 先消耗 LLM、TTS 和素材服务额度；中间产物接口仍可独立使用。
     video_music_provider = _VIDEO_MUSIC_PROVIDERS.get(params.bgm_type)
