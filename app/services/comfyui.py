@@ -267,21 +267,21 @@ def build_qwen_image_workflow(
     return {
         "1": {
             "inputs": {
-                "unet_name": str(config.app.get("comfyui_qwen_model", "z_image_turbo_bf16.safetensors") or "z_image_turbo_bf16.safetensors").strip(),
+                "unet_name": str(config.app.get("comfyui_qwen_model", "qwen_image_2.1_int8_convrot.safetensors") or "qwen_image_2.1_int8_convrot.safetensors").strip(),
                 "weight_dtype": "default",
             },
             "class_type": "UNETLoader",
         },
         "2": {
             "inputs": {
-                "clip_name": str(config.app.get("comfyui_qwen_clip", "qwen_2.5_vl_7b_fp8_scaled.safetensors") or "qwen_2.5_vl_7b_fp8_scaled.safetensors").strip(),
+                "clip_name": str(config.app.get("comfyui_qwen_clip", "qwen3vl_8b_int8_convrot.safetensors") or "qwen3vl_8b_int8_convrot.safetensors").strip(),
                 "type": "sdxl",
             },
             "class_type": "CLIPLoader",
         },
         "3": {
             "inputs": {
-                "vae_name": str(config.app.get("comfyui_qwen_vae", "qwen_image_vae.safetensors") or "qwen_image_vae.safetensors").strip(),
+                "vae_name": str(config.app.get("comfyui_qwen_vae", "qwen_image_2.1_vae_bf16.safetensors") or "qwen_image_2.1_vae_bf16.safetensors").strip(),
             },
             "class_type": "VAELoader",
         },

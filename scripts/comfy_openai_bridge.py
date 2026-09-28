@@ -37,21 +37,21 @@ def build_qwen_image_workflow(
     return {
         "1": {
             "inputs": {
-                "unet_name": "z_image_turbo_bf16.safetensors",
+                "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
                 "weight_dtype": "default",
             },
             "class_type": "UNETLoader",
         },
         "2": {
             "inputs": {
-                "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+                "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
                 "type": "sdxl",
             },
             "class_type": "CLIPLoader",
         },
         "3": {
             "inputs": {
-                "vae_name": "qwen_image_vae.safetensors",
+                "vae_name": "qwen_image_2.1_vae_bf16.safetensors",
             },
             "class_type": "VAELoader",
         },
