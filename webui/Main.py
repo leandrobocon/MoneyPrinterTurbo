@@ -127,17 +127,17 @@ LOOMLOOM_MAX_POLL_FAILURES = 5
 VIDEO_SOURCE_GROUPS = {
     "stock_video": ("pexels", "pixabay", "coverr"),
     "ai_video": (
-        "comfyui_wan",
         "metaso_minimax",
         "ofox",
         "loomloom",
         "volcengine_seedance",
         "wavespeed",
         "muapi",
+        "comfyui_wan",
     ),
     "ai_image": (
-        "drawthings",
         "openai_image",
+        "drawthings",
     ),
     "local": ("local",),
 }

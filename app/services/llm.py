@@ -901,12 +901,13 @@ def generate_terms(
         ordering_rule = (
             "6. keep the terms in the same order as the script narration; "
             "earlier terms must describe earlier visual moments.\n"
-            "7. CRITICAL: Each array element MUST be a single, complete, standalone visual description (Subject + Action + Environment + Camera angle + Lighting). DO NOT split camera angles, modifiers, or sub-clauses into separate array items!"
+            "7. CRITICAL: Each array element MUST correspond directly to the specific topic/scene described in that part of the video script. Do NOT repeat previous visual scenes!\n"
+            "8. CRITICAL: Each array element MUST be a single, complete, standalone visual description (Subject + Action + Environment + Camera angle + Lighting). DO NOT split camera angles, modifiers, or sub-clauses into separate array items!"
         )
         example_terms = [
-            "Cinematic wide angle shot of a vibrant rainforest canopy at sunrise, lush green foliage bathed in golden morning light",
-            "Extreme close-up macro shot of a tropical bird with iridescent feathers singing on a mossy branch, soft bokeh background",
-            "Side view of two colorful birds in synchronized flight across a bright blue sky with soft white clouds, photorealistic documentary style",
+            "Cinematic establishing shot of an ancient mountain castle surrounded by misty pine forests at dawn, golden hour sunlight",
+            "Close-up of a craftsman's hands carefully shaping warm glowing pottery on a spinning wheel in a rustic workshop",
+            "Wide aerial view of an electric train gliding smoothly through a modern city with gleaming glass skyscrapers under a vibrant sunset",
         ]
         output_example = json.dumps(example_terms, ensure_ascii=False)
     else:
@@ -931,13 +932,13 @@ def generate_terms(
 
 ## Instructions & Constraints:
 1. Return ONLY a valid JSON array of strings (e.g. ["prompt 1", "prompt 2", ...]).
-2. Each search term must be a rich, descriptive, photorealistic scene prompt containing:
-   - Specific Subject (what is in the scene)
+2. Each search term must be a rich, descriptive, photorealistic scene prompt directly visualizing what is being discussed in that part of the video script:
+   - Specific Subject (what is in the scene, directly related to the script narrative)
    - Action / Motion (what is happening or moving)
    - Environment / Setting (location, atmosphere, time of day)
    - Lighting & Camera (e.g., golden hour sunlight, wide angle, macro close-up, soft bokeh)
-3. NEVER split a single scene into multiple array elements (e.g., do NOT put "wide angle view" or "sunlight glinting" as separate items).
-4. Do NOT output generic single words or placeholder text.
+3. Ensure every generated scene is UNIQUE and does not repeat previously shown scenes.
+4. NEVER split a single scene into multiple array elements (e.g., do NOT put "wide angle view" or "sunlight glinting" as separate items).
 5. All descriptions MUST be in English only. Chinese or other languages are not accepted.
 {ordering_rule}
 

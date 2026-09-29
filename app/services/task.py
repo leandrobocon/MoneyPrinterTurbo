@@ -314,15 +314,26 @@ def generate_script(task_id, params):
 def generate_terms(task_id, params, video_script):
     logger.info("\n\n## generating video terms")
     video_terms = params.video_terms
+    is_ai_material = params.video_source in (
+        "comfyui", "comfyui_wan", "drawthings", "draw_things", "openai_image",
+        "wavespeed", "volcengine_seedance", "ofox", "metaso_minimax", "muapi"
+    )
+    match_order = params.match_materials_to_script or is_ai_material
     if not video_terms:
-        # 开启素材按文案顺序匹配后，关键词本身也必须按脚本叙事顺序生成；
-        # 否则后续即使顺序下载和顺序拼接，也只能复用一组全局主题词，
-        # 无法改善“后面内容的画面提前出现”的问题。
+        clean_text = utils.remove_pause_tags(video_script or "").strip()
+        clip_dur = max(1, getattr(params, "video_clip_duration", 5) or 5)
+        words = clean_text.split()
+        if len(words) > 8:
+            est_seconds = len(words) / 2.5
+        else:
+            est_seconds = len(clean_text) / 3.5
+
+        needed_amount = max(8 if match_order else 5, math.ceil(est_seconds / clip_dur))
         video_terms = llm.generate_terms(
             video_subject=params.video_subject,
-            video_script=utils.remove_pause_tags(video_script),
-            amount=8 if params.match_materials_to_script else 5,
-            match_script_order=params.match_materials_to_script,
+            video_script=clean_text,
+            amount=needed_amount if match_order else 5,
+            match_script_order=match_order,
         )
     else:
         if isinstance(video_terms, str):
@@ -343,9 +354,7 @@ def generate_terms(task_id, params, video_script):
         )
         return None
 
-    # 可选的 TwelveLabs Marengo 语义重排：未启用时返回原顺序，无任何副作用。
-    # 顺序匹配模式下关键词顺序本身就是脚本叙事顺序，必须保持原样，故跳过。
-    if not params.match_materials_to_script:
+    if not match_order:
         video_terms = twelvelabs.rerank_terms_by_subject(
             video_subject=params.video_subject,
             search_terms=video_terms,
@@ -732,6 +741,11 @@ def get_video_materials(
         logger.info(f"\n\n## downloading videos from {params.video_source}")
         # 顺序匹配模式只在用户显式开启时生效。这里强制素材下载按关键词顺序
         # 轮询，避免某个早期关键词下载太多素材，把后续脚本主题挤出最终时间线。
+        is_ai_material = params.video_source in (
+            "comfyui", "comfyui_wan", "drawthings", "draw_things", "openai_image",
+            "wavespeed", "volcengine_seedance", "ofox", "metaso_minimax", "muapi"
+        )
+        match_order = params.match_materials_to_script or is_ai_material
         try:
             downloaded_videos = material.download_videos(
                 task_id=task_id,
@@ -740,12 +754,12 @@ def get_video_materials(
                 video_aspect=params.video_aspect,
                 video_concat_mode=(
                     VideoConcatMode.sequential
-                    if params.match_materials_to_script
+                    if match_order
                     else params.video_concat_mode
                 ),
                 audio_duration=audio_duration * params.video_count,
                 max_clip_duration=params.video_clip_duration,
-                match_script_order=params.match_materials_to_script,
+                match_script_order=match_order,
             )
         except volcengine_seedance.VolcEngineSeedanceError as exc:
             # 未确认状态和已生成但下载失败都对应一个可在方舟控制台恢复的远端
