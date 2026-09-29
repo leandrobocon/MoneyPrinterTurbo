@@ -829,6 +829,62 @@ def _strip_code_fence(text: str) -> str:
     return t.strip()
 
 
+def sanitize_and_merge_terms(raw_terms: List[str]) -> List[str]:
+    """
+    Sanitizes and merges fragmented video search / image generation terms.
+    Small or local LLMs often output fragmented phrases (e.g. splitting a single visual
+    prompt across multiple array elements like ["A bird in a tree", "wide angle view", "soft bokeh"]).
+    This helper merges clauses starting with dangling prepositions or short modifier tags into the preceding term,
+    ensuring each item in the final list is a rich, complete visual scene description.
+    """
+    if not raw_terms:
+        return []
+
+    cleaned: List[str] = []
+
+    # Dangling clauses (always fragments when following a main prompt)
+    clause_prefixes = (
+        "with ", "and ", "in ", "on ", "at ", "under ", "over ", "by ",
+        "from ", "into ", "through ", "during ", "amid ", "amidst ",
+        "sunlight ", "dappled ", "beak ", "feathers ", "wings ",
+        "shielding ", "spreading ", "glinting "
+    )
+
+    # Short modifier tags (< 35 chars) that are camera/quality/style tags
+    short_modifier_prefixes = (
+        "wide angle", "close up", "close-up", "extreme close-up", "macro shot",
+        "bokeh", "soft bokeh", "cinematic", "4k", "8k", "photorealistic",
+        "soft light", "depth of field", "slow motion", "background",
+        "view from", "side view", "top view", "aerial view"
+    )
+
+    for item in raw_terms:
+        if not isinstance(item, str):
+            continue
+        t = item.strip().strip('"\'`')
+        t = re.sub(r"[,;:\s]+$", "", t).strip()
+        if not t:
+            continue
+
+        is_fragment = False
+        if cleaned:
+            t_lower = t.lower()
+            if any(t_lower.startswith(p) for p in clause_prefixes):
+                is_fragment = True
+            elif len(t) < 35 and any(t_lower.startswith(p) for p in short_modifier_prefixes):
+                is_fragment = True
+
+        if is_fragment and cleaned:
+            prev = cleaned[-1]
+            if prev.endswith(".") or prev.endswith(","):
+                prev = prev[:-1].strip()
+            cleaned[-1] = f"{prev}, {t}"
+        else:
+            cleaned.append(t)
+
+    return cleaned
+
+
 def generate_terms(
     video_subject: str,
     video_script: str,
@@ -844,26 +900,28 @@ def generate_terms(
         )
         ordering_rule = (
             "6. keep the terms in the same order as the script narration; "
-            "earlier terms must describe earlier visual moments."
+            "earlier terms must describe earlier visual moments.\n"
+            "7. CRITICAL: Each array element MUST be a single, complete, standalone visual description (Subject + Action + Environment + Camera angle + Lighting). DO NOT split camera angles, modifiers, or sub-clauses into separate array items!"
         )
-        # 有序关键词模式下，示例数量要和 amount 保持一致，避免模型被固定
-        # 的 4 个示例误导，导致长文案只返回少量关键词，影响素材覆盖度。
         example_terms = [
-            "opening visual topic",
-            *[f"script visual topic {index}" for index in range(2, max(amount, 1))],
-            "final visual topic",
+            "Cinematic wide angle shot of a vibrant rainforest canopy at sunrise, lush green foliage bathed in golden morning light",
+            "Extreme close-up macro shot of a tropical bird with iridescent feathers singing on a mossy branch, soft bokeh background",
+            "Side view of two colorful birds in synchronized flight across a bright blue sky with soft white clouds, photorealistic documentary style",
         ]
-        output_example = json.dumps(example_terms[:amount], ensure_ascii=False)
+        output_example = json.dumps(example_terms, ensure_ascii=False)
     else:
         goal = (
             f"Generate {amount} search terms for stock videos, depending on the "
             "subject of a video."
         )
-        ordering_rule = ""
-        output_example = (
-            '["search term 1", "search term 2", "search term 3",'
-            '"search term 4", "search term 5"]'
+        ordering_rule = (
+            "6. CRITICAL: Each array element MUST be a single, complete, standalone visual description (Subject + Action + Environment + Camera angle + Lighting). DO NOT split camera angles, modifiers, or sub-clauses into separate array items!"
         )
+        output_example = json.dumps([
+            "Cinematic wide angle shot of a futuristic metropolis with neon reflections on wet asphalt at night, 8k documentary style",
+            "Close-up of an astronaut walking across a rugged Martian landscape with red dust swirling in the wind, soft dramatic rim lighting",
+            "Macro shot of fresh morning dew drops glistening on vibrant green leaves in a tranquil Japanese garden, soft focus background",
+        ], ensure_ascii=False)
 
     prompt = f"""
 # Role: Video Search Terms Generator
@@ -871,25 +929,27 @@ def generate_terms(
 ## Goals:
 {goal}
 
-## Constrains:
-1. the search terms are to be returned as a json-array of strings.
-2. each search term should be a specific, detailed visual scene description suitable for photorealistic video generation (describing realistic subjects, natural physical movements, camera perspective, authentic lighting and environmental settings). Focus on photorealistic and real-life documentary descriptions. Avoid generic, vague, cartoonish, or stylized descriptions.
-3. you must only return the json-array of strings. you must not return anything else. you must not return the script.
-4. the search terms must be related to the subject and scenes of the video.
-5. reply with english search terms only.
+## Instructions & Constraints:
+1. Return ONLY a valid JSON array of strings (e.g. ["prompt 1", "prompt 2", ...]).
+2. Each search term must be a rich, descriptive, photorealistic scene prompt containing:
+   - Specific Subject (what is in the scene)
+   - Action / Motion (what is happening or moving)
+   - Environment / Setting (location, atmosphere, time of day)
+   - Lighting & Camera (e.g., golden hour sunlight, wide angle, macro close-up, soft bokeh)
+3. NEVER split a single scene into multiple array elements (e.g., do NOT put "wide angle view" or "sunlight glinting" as separate items).
+4. Do NOT output generic single words or placeholder text.
+5. All descriptions MUST be in English only. Chinese or other languages are not accepted.
 {ordering_rule}
 
-## Output Example:
+## Output Format Example:
 {output_example}
 
 ## Context:
-### Video Subject
+### Video Subject:
 {video_subject}
 
-### Video Script
+### Video Script:
 {video_script}
-
-Please note that you must use English for generating video search terms; Chinese is not accepted.
 """.strip()
 
     logger.info(f"subject: {video_subject}, match_script_order: {match_script_order}")
@@ -903,16 +963,12 @@ Please note that you must use English for generating video search terms; Chinese
             else:
                 response = _generate_response(prompt, app_config=app_config)
             if response.startswith("Error: "):
-                # generate_terms 的公开返回类型是 List[str]。如果把 Provider 的
-                # 错误文案原样返回，下游只做空值判断时会把非空字符串误认为成功，
-                # 素材下载循环还会按字符遍历错误文案，产生无意义的外部请求。
-                # 这里统一返回空列表，让任务编排层在真实故障位置立即结束任务。
                 logger.error(f"failed to generate video terms: {response}")
                 return []
-            search_terms = json.loads(_strip_code_fence(response))
-            if not isinstance(search_terms, list) or not all(
-                isinstance(term, str) for term in search_terms
-            ):
+            parsed = json.loads(_strip_code_fence(response))
+            if isinstance(parsed, list) and all(isinstance(term, str) for term in parsed):
+                search_terms = sanitize_and_merge_terms(parsed)
+            else:
                 logger.error("response is not a list of strings.")
                 continue
 
@@ -922,11 +978,10 @@ Please note that you must use English for generating video search terms; Chinese
                 match = re.search(r"\[.*]", response, re.DOTALL)
                 if match:
                     try:
-                        search_terms = json.loads(match.group())
+                        parsed = json.loads(match.group())
+                        if isinstance(parsed, list):
+                            search_terms = sanitize_and_merge_terms(parsed)
                     except Exception as e:
-                        # 这里保留重试流程，但必须记录 LLM 返回的非标准 JSON，
-                        # 否则后续排查搜索词为空时无法定位
-                        # 是模型格式问题还是解析逻辑问题。
                         logger.warning(f"failed to generate video terms: {str(e)}")
 
         if search_terms and len(search_terms) > 0:

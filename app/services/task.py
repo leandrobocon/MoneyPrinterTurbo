@@ -326,12 +326,13 @@ def generate_terms(task_id, params, video_script):
         )
     else:
         if isinstance(video_terms, str):
-            video_terms = [term.strip() for term in re.split(r"[,，]", video_terms)]
+            video_terms = [term.strip() for term in re.split(r"[\n,，]", video_terms) if term.strip()]
         elif isinstance(video_terms, list):
-            video_terms = [term.strip() for term in video_terms]
+            video_terms = [term.strip() for term in video_terms if isinstance(term, str) and term.strip()]
         else:
             raise ValueError("video_terms must be a string or a list of strings.")
 
+        video_terms = llm.sanitize_and_merge_terms(video_terms)
         logger.debug(f"video terms: {utils.to_json(video_terms)}")
 
     if not video_terms:

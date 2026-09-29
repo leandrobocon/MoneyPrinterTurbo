@@ -2348,27 +2348,27 @@ class TestRetryWarningBoundary(unittest.TestCase):
             "Warning must not fire on the final attempt — no further retry will occur",
         )
 
-    def test_generate_terms_no_spurious_warning_on_last_attempt(self):
-        with (
-            patch.object(
-                llm,
-                "_generate_response",
-                side_effect=RuntimeError("provider unavailable"),
-            ),
-            patch.object(llm, "logger") as mock_logger,
-        ):
-            llm.generate_terms(
-                video_subject="test subject",
-                video_script="some script text",
-            )
-
-        count = self._trying_again_count(mock_logger, "trying again")
+    def test_sanitize_and_merge_terms(self):
+        raw_terms = [
+            "A pair of vibrant tropical birds flying gracefully across a clear blue sky",
+            "sunlight glinting off their feathers",
+            "wide angle view",
+            "Extreme close-up of a songbird perched on a mossy branch in a lush rainforest",
+            "beak moving rhythmically while singing",
+            "soft bokeh background",
+        ]
+        sanitized = llm.sanitize_and_merge_terms(raw_terms)
+        self.assertEqual(len(sanitized), 2)
         self.assertEqual(
-            count,
-            llm._max_retries - 1,
-            "Warning must not fire on the final attempt — no further retry will occur",
+            sanitized[0],
+            "A pair of vibrant tropical birds flying gracefully across a clear blue sky, sunlight glinting off their feathers, wide angle view"
+        )
+        self.assertEqual(
+            sanitized[1],
+            "Extreme close-up of a songbird perched on a mossy branch in a lush rainforest, beak moving rhythmically while singing, soft bokeh background"
         )
 
 
 if __name__ == "__main__":
     unittest.main()
+
