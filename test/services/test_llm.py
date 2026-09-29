@@ -2369,6 +2369,30 @@ class TestRetryWarningBoundary(unittest.TestCase):
         )
 
 
+    def test_sanitize_and_merge_bird_terms_real_world(self):
+        raw_terms = [
+            "Macro close-up of a colorful tropical bird performing a rhythmic dance on a mossy branch in a lush rainforest",
+            "soft dappled sunlight",
+            "Wide angle shot of two vibrant birds performing synchronized acrobatic flight maneuvers over a misty jungle canopy",
+            "bright daylight",
+            "Extreme close-up of a songbird's beak and throat vibrating while singing a complex melody",
+            "perched on a flowering branch, soft bokeh background",
+            "Medium shot of a pair of birds interacting closely on a branch",
+            "displaying instinctual courtship movements",
+            "warm golden hour light",
+            "Close-up of a bird's beak carefully placing a small twig into a woven nest nestled in a tree, dappled forest light",
+            "Low angle shot of two birds perched protectively side-by-side against a dramatic sunset sky, cinematic lighting",
+            "Wide shot of a pair of birds flying side-by-side through a sun-drenched forest clearing",
+            "golden hour glow",
+            "Macro close-up of a bird gently guarding its nest and eggs",
+            "warm soft afternoon sunlight, cinematic depth of field",
+        ]
+        sanitized = llm.sanitize_and_merge_terms(raw_terms)
+        self.assertEqual(len(sanitized), 8)
+        for term in sanitized:
+            self.assertTrue("bird" in term.lower() or "songbird" in term.lower(), f"Term missing bird subject: {term}")
+
+
 if __name__ == "__main__":
     unittest.main()
 

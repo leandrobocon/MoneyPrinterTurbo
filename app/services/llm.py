@@ -834,28 +834,37 @@ def sanitize_and_merge_terms(raw_terms: List[str]) -> List[str]:
     Sanitizes and merges fragmented video search / image generation terms.
     Small or local LLMs often output fragmented phrases (e.g. splitting a single visual
     prompt across multiple array elements like ["A bird in a tree", "wide angle view", "soft bokeh"]).
-    This helper merges clauses starting with dangling prepositions or short modifier tags into the preceding term,
-    ensuring each item in the final list is a rich, complete visual scene description.
+    This helper merges clauses starting with dangling prepositions, participles, or lighting/camera tags into the preceding term,
+    ensuring each item in the final list is a rich, complete visual scene description with a clear subject.
     """
     if not raw_terms:
         return []
 
     cleaned: List[str] = []
 
-    # Dangling clauses (always fragments when following a main prompt)
+    # Clauses and phrases that lack an independent subject (always fragments when following a main prompt)
     clause_prefixes = (
         "with ", "and ", "in ", "on ", "at ", "under ", "over ", "by ",
         "from ", "into ", "through ", "during ", "amid ", "amidst ",
-        "sunlight ", "dappled ", "beak ", "feathers ", "wings ",
-        "shielding ", "spreading ", "glinting "
+        # Lighting / atmosphere / time
+        "soft ", "bright ", "warm ", "golden ", "dappled ", "dim ", "dark ",
+        "natural ", "ambient ", "sunlight", "daylight", "afternoon sunlight",
+        "morning sunlight", "forest light", "forest clearing", "sunset glow", "golden hour",
+        # Participle actions without subject
+        "displaying ", "perched ", "singing ", "flying ", "nestled ", "guarding ",
+        "holding ", "running ", "sitting ", "standing ", "moving ", "walking ",
+        "glinting ", "vibrating ", "performing ", "shielding ", "spreading ",
+        # Details & body parts
+        "beak ", "feathers ", "wings ", "eyes ", "hands ", "paws "
     )
 
-    # Short modifier tags (< 35 chars) that are camera/quality/style tags
+    # Short modifier tags (< 45 chars) that are camera/quality/style tags
     short_modifier_prefixes = (
         "wide angle", "close up", "close-up", "extreme close-up", "macro shot",
-        "bokeh", "soft bokeh", "cinematic", "4k", "8k", "photorealistic",
-        "soft light", "depth of field", "slow motion", "background",
-        "view from", "side view", "top view", "aerial view"
+        "macro close-up", "bokeh", "soft bokeh", "cinematic", "cinematic lighting",
+        "cinematic depth", "4k", "8k", "photorealistic", "soft light",
+        "depth of field", "slow motion", "background",
+        "view from", "side view", "top view", "aerial view", "low angle", "high angle"
     )
 
     for item in raw_terms:
@@ -871,7 +880,7 @@ def sanitize_and_merge_terms(raw_terms: List[str]) -> List[str]:
             t_lower = t.lower()
             if any(t_lower.startswith(p) for p in clause_prefixes):
                 is_fragment = True
-            elif len(t) < 35 and any(t_lower.startswith(p) for p in short_modifier_prefixes):
+            elif len(t) < 45 and any(t_lower.startswith(p) for p in short_modifier_prefixes):
                 is_fragment = True
 
         if is_fragment and cleaned:

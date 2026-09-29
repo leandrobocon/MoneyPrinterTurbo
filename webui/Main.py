@@ -1460,7 +1460,7 @@ def _apply_restored_params(params):
     """
     video_terms = params.get("video_terms") or ""
     if isinstance(video_terms, list):
-        video_terms = ", ".join(str(term) for term in video_terms)
+        video_terms = "\n".join(str(term) for term in video_terms)
 
     # 文案与高级脚本设置。
     st.session_state["video_subject"] = params.get("video_subject") or ""
@@ -4659,7 +4659,7 @@ def _render_local_script_generation(params):
             st.error(tr(terms))
         else:
             st.session_state["video_script"] = script
-            st.session_state["video_terms"] = ", ".join(terms)
+            st.session_state["video_terms"] = "\n".join(terms)
             st.session_state["loomloom_video_scene_autofill_digest"] = (
                 hashlib.sha256(script.strip().encode("utf-8")).hexdigest()
             )
@@ -4690,7 +4690,7 @@ def _render_loomloom_candidates():
     )
     selected = candidates[selected_index]
     st.code(selected.script, language=None, wrap_lines=True)
-    st.caption(", ".join(selected.video_terms))
+    st.caption("\n".join(selected.video_terms))
     if st.button(
         tr("Use Selected Candidate"),
         key="loomloom_apply_candidate",
@@ -4698,7 +4698,7 @@ def _render_loomloom_candidates():
         use_container_width=True,
     ):
         st.session_state["video_script"] = selected.script
-        st.session_state["video_terms"] = ", ".join(selected.video_terms)
+        st.session_state["video_terms"] = "\n".join(selected.video_terms)
         # 与普通大模型生成文案保持一致：应用新候选后仅推荐一次素材数量。
         st.session_state["loomloom_video_scene_autofill_digest"] = (
             hashlib.sha256(selected.script.strip().encode("utf-8")).hexdigest()
@@ -5154,7 +5154,7 @@ def _render_script_settings(panel, params):
                         if "Error: " in terms:
                             st.error(tr(terms))
                         else:
-                            st.session_state["video_terms"] = ", ".join(terms)
+                            st.session_state["video_terms"] = "\n".join(terms)
 
             params.video_terms = st.text_area(
                 tr("Video Keywords"),

@@ -336,14 +336,29 @@ def generate_terms(task_id, params, video_script):
             match_script_order=match_order,
         )
     else:
-        if isinstance(video_terms, str):
-            video_terms = [term.strip() for term in re.split(r"[\n,，]", video_terms) if term.strip()]
-        elif isinstance(video_terms, list):
-            video_terms = [term.strip() for term in video_terms if isinstance(term, str) and term.strip()]
+        if isinstance(video_terms, list):
+            raw_terms = [str(term).strip() for term in video_terms if str(term).strip()]
+        elif isinstance(video_terms, str):
+            text = video_terms.strip()
+            if text.startswith("[") and text.endswith("]"):
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, list):
+                        raw_terms = [str(t).strip() for t in parsed if str(t).strip()]
+                    else:
+                        raw_terms = [text]
+                except Exception:
+                    raw_terms = [text]
+            elif "\n" in text:
+                raw_terms = [line.strip().lstrip("0123456789.-*•) ") for line in text.split("\n") if line.strip()]
+            elif ";" in text or "；" in text:
+                raw_terms = [p.strip() for p in re.split(r"[;；]", text) if p.strip()]
+            else:
+                raw_terms = [p.strip() for p in re.split(r"[,，]", text) if p.strip()]
         else:
             raise ValueError("video_terms must be a string or a list of strings.")
 
-        video_terms = llm.sanitize_and_merge_terms(video_terms)
+        video_terms = llm.sanitize_and_merge_terms(raw_terms)
         logger.debug(f"video terms: {utils.to_json(video_terms)}")
 
     if not video_terms:
