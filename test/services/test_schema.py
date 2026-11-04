@@ -8,7 +8,14 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.models import schema
-from app.models.schema import SubtitleRequest, VideoAspect, VideoFitMode, VideoParams
+from app.models.schema import (
+    SubtitleRequest,
+    TaskVideoRequest,
+    VideoAspect,
+    VideoConcatMode,
+    VideoFitMode,
+    VideoParams,
+)
 
 
 class TestVideoAspect(unittest.TestCase):
@@ -23,6 +30,24 @@ class TestVideoAspect(unittest.TestCase):
 
 
 class TestVideoParams(unittest.TestCase):
+    def test_enum_defaults_have_the_same_types_as_explicit_values(self):
+        """Pydantic must not expose raw strings only when a field is omitted."""
+        default_params = VideoParams(video_subject="Coffee")
+        explicit_params = VideoParams(
+            video_subject="Coffee",
+            video_aspect=VideoAspect.portrait.value,
+            video_concat_mode=VideoConcatMode.random.value,
+        )
+
+        for params in (default_params, explicit_params):
+            self.assertIs(params.video_aspect, VideoAspect.portrait)
+            self.assertIs(params.video_concat_mode, VideoConcatMode.random)
+
+        # Keep the public JSON representation backward-compatible.
+        serialized = default_params.model_dump(mode="json")
+        self.assertEqual(serialized["video_aspect"], "9:16")
+        self.assertEqual(serialized["video_concat_mode"], "random")
+
     def test_video_fit_mode_defaults_to_cover_and_validates_values(self):
         self.assertEqual(
             VideoParams(video_subject="Coffee").video_fit_mode,
@@ -51,6 +76,48 @@ class TestVideoParams(unittest.TestCase):
 
         self.assertEqual(params.video_clip_duration, 1)
         self.assertEqual(params.video_count, 1)
+
+    def test_api_video_count_is_bounded_without_limiting_cli_params(self):
+        """One HTTP task must not schedule an unbounded render batch."""
+        self.assertEqual(
+            TaskVideoRequest(video_subject="Coffee", video_count=5).video_count, 5
+        )
+        with self.assertRaises(ValidationError):
+            TaskVideoRequest(video_subject="Coffee", video_count=6)
+
+        # The shared model also powers the CLI, which documents any positive
+        # count, so its existing behavior must remain available there.
+        self.assertEqual(
+            VideoParams(video_subject="Coffee", video_count=6).video_count, 6
+        )
+
+    def test_api_render_threads_are_bounded_without_limiting_cli_params(self):
+        """An HTTP caller cannot pass arbitrary FFmpeg thread counts."""
+        self.assertEqual(
+            TaskVideoRequest(video_subject="Coffee", n_threads=16).n_threads, 16
+        )
+        for value in (0, -1, 17):
+            with self.subTest(value=value):
+                with self.assertRaises(ValidationError):
+                    TaskVideoRequest(video_subject="Coffee", n_threads=value)
+
+        self.assertEqual(
+            VideoParams(video_subject="Coffee", n_threads=17).n_threads, 17
+        )
+
+    def test_api_clip_duration_is_bounded_without_limiting_cli_params(self):
+        """The API keeps one clip within the WebUI provider duration range."""
+        self.assertEqual(
+            TaskVideoRequest(video_subject="Coffee", video_clip_duration=15).video_clip_duration,
+            15,
+        )
+        with self.assertRaises(ValidationError):
+            TaskVideoRequest(video_subject="Coffee", video_clip_duration=16)
+
+        self.assertEqual(
+            VideoParams(video_subject="Coffee", video_clip_duration=16).video_clip_duration,
+            16,
+        )
 
     def test_subtitle_modes_accept_only_supported_api_values(self):
         """新增字幕参数必须拒绝拼写错误，避免请求成功后静默降级。"""

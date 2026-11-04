@@ -8,11 +8,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import redis
 from fastapi.testclient import TestClient
 
 from app import asgi
 from app.config import config
 from app.controllers.manager.base_manager import TaskQueueFullError
+from app.controllers.manager.redis_manager import RedisTaskManager
 from app.controllers.v1 import video as video_controller
 from app.models import const
 from app.models.exception import HttpException
@@ -33,7 +35,7 @@ class TestVideoControllerHelpers(unittest.TestCase):
         headers = {"x-task-id": "request-123"}
         if range_header is not None:
             headers["Range"] = range_header
-        return SimpleNamespace(headers=headers)
+        return SimpleNamespace(headers=headers, method="GET")
 
     def test_sanitize_upload_filename_removes_client_path(self):
         """Windows 和 POSIX 客户端路径都只能保留最后一段安全文件名。"""
@@ -47,6 +49,43 @@ class TestVideoControllerHelpers(unittest.TestCase):
                     expected,
                 )
 
+    def test_local_material_list_skips_broken_and_external_symlinks(self):
+        """One stale link must not 500 the picker or reveal external file metadata."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            material_dir = root / "materials"
+            material_dir.mkdir()
+            (material_dir / "clip.mp4").write_bytes(b"video")
+            external = root / "private.mp4"
+            external.write_bytes(b"private contents")
+            try:
+                (material_dir / "external.mp4").symlink_to(external)
+                (material_dir / "broken.mp4").symlink_to(root / "missing.mp4")
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"symlinks are unavailable: {exc}")
+
+            with patch.object(
+                video_controller.utils, "storage_dir", return_value=str(material_dir)
+            ):
+                response = video_controller.get_video_materials_list(self._request())
+
+        self.assertEqual(response["data"]["files"], [
+            {"name": "clip.mp4", "size": 5, "file": "clip.mp4"}
+        ])
+
+    def test_local_material_list_includes_supported_uppercase_extensions(self):
+        """Manually copied materials should be listed like uploads on any OS."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            (Path(temp_dir) / "photo.PNG").write_bytes(b"image")
+            with patch.object(
+                video_controller.utils, "storage_dir", return_value=temp_dir
+            ):
+                response = video_controller.get_video_materials_list(self._request())
+
+        self.assertEqual(response["data"]["files"], [
+            {"name": "photo.PNG", "size": 5, "file": "photo.PNG"}
+        ])
+
     def test_fastapi_startup_recovers_interrupted_cross_posts(self):
         """API 进程启动时必须执行一次发布遗留状态恢复。"""
         from app.services import task as task_service
@@ -55,11 +94,32 @@ class TestVideoControllerHelpers(unittest.TestCase):
 
             async def run_lifespan():
                 async with asgi.application_lifespan(asgi.app):
-                    pass
+                    recover.assert_called_once_with()
 
             asyncio.run(run_lifespan())
 
-        recover.assert_called_once_with()
+    def test_fastapi_startup_resumes_persisted_redis_queue(self):
+        """A restart must dispatch queued Redis work before serving requests."""
+        from app.services import task as task_service
+
+        with patch("app.controllers.manager.redis_manager.redis.Redis.from_url"):
+            manager = RedisTaskManager(2, "redis://localhost:6379/0")
+
+        with (
+            patch.object(video_controller, "task_manager", manager),
+            patch.object(manager, "check_queue") as check_queue,
+            patch.object(manager, "start_queue_dispatcher") as start_dispatcher,
+            patch.object(manager, "stop_queue_dispatcher") as stop_dispatcher,
+            patch.object(task_service, "recover_interrupted_cross_posts"),
+        ):
+            async def run_lifespan():
+                async with asgi.application_lifespan(asgi.app):
+                    self.assertEqual(check_queue.call_count, 2)
+
+            asyncio.run(run_lifespan())
+
+        start_dispatcher.assert_called_once_with()
+        stop_dispatcher.assert_called_once_with()
 
     def test_sanitize_upload_filename_rejects_empty_name(self):
         """空文件名和目录占位符不能进入服务端存储路径。"""
@@ -122,10 +182,10 @@ class TestVideoControllerHelpers(unittest.TestCase):
 class TestVideoControllerTasks(unittest.TestCase):
     @staticmethod
     def _request():
-        return SimpleNamespace(headers={"x-task-id": "request-123"})
+        return SimpleNamespace(headers={"x-task-id": "request-123"}, method="GET")
 
     def test_video_task_rejects_font_outside_font_directory_before_queueing(self):
-        """非法字体路径必须在任务入队前返回 400，不产生付费后台任务。"""
+        """非法字体路径必须在任务入队前返回 403，不产生付费后台任务。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             font_dir = Path(temp_dir, "fonts")
             font_dir.mkdir()
@@ -143,7 +203,7 @@ class TestVideoControllerTasks(unittest.TestCase):
                     with self.assertRaises(HttpException) as raised:
                         video_controller.create_task(self._request(), body, stop_at="video")
 
-                    self.assertEqual(raised.exception.status_code, 400)
+                    self.assertEqual(raised.exception.status_code, 403)
                     update_task.assert_not_called()
                     add_task.assert_not_called()
 
@@ -168,7 +228,7 @@ class TestVideoControllerTasks(unittest.TestCase):
                 with self.assertRaises(HttpException) as raised:
                     video_controller.create_task(self._request(), body, stop_at="video")
 
-            self.assertEqual(raised.exception.status_code, 400)
+            self.assertEqual(raised.exception.status_code, 403)
             update_task.assert_not_called()
             add_task.assert_not_called()
 
@@ -289,6 +349,49 @@ class TestVideoControllerTasks(unittest.TestCase):
         )
         get_all.assert_called_once_with(2, 10)
 
+    def test_task_list_returns_download_urls_without_mutating_state(self):
+        """List and detail endpoints must expose the same usable video URLs."""
+        task_id = "listed-task-url"
+        task_dir = utils.task_dir(task_id)
+        video_path = os.path.join(task_dir, "final-1.mp4")
+        audio_path = os.path.join(task_dir, "audio.mp3")
+        subtitle_path = os.path.join(task_dir, "subtitle.srt")
+        Path(video_path).write_bytes(b"fake-video")
+        Path(audio_path).write_bytes(b"fake-audio")
+        Path(subtitle_path).write_text("subtitle", encoding="utf-8")
+        stored_task = {
+            "task_id": task_id,
+            "state": const.TASK_STATE_COMPLETE,
+            "videos": [video_path],
+            "combined_videos": [video_path],
+            "audio_file": audio_path,
+            "subtitle_path": subtitle_path,
+        }
+
+        try:
+            with (
+                patch.object(
+                    video_controller.sm.state,
+                    "get_all_tasks",
+                    return_value=([stored_task], 1),
+                ),
+                patch.dict(config.app, {"endpoint": ""}),
+            ):
+                response = video_controller.get_all_tasks(
+                    self._request(), page=1, page_size=10
+                )
+
+            listed = response["data"]["tasks"][0]
+            expected_url = f"/tasks/{task_id}/final-1.mp4"
+            self.assertEqual(listed["videos"], [expected_url])
+            self.assertEqual(listed["combined_videos"], [expected_url])
+            self.assertEqual(listed["audio_file"], f"/tasks/{task_id}/audio.mp3")
+            self.assertEqual(listed["subtitle_path"], f"/tasks/{task_id}/subtitle.srt")
+            self.assertEqual(stored_task["videos"], [video_path])
+            self.assertEqual(stored_task["audio_file"], audio_path)
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+
     def test_task_query_returns_relative_url_without_mutating_state(self):
         """
         endpoint 未配置时应返回相对任务 URL，且不能把展示用 URL 回写到状态，
@@ -297,7 +400,11 @@ class TestVideoControllerTasks(unittest.TestCase):
         task_id = "controller-task-url"
         task_dir = utils.task_dir(task_id)
         video_path = os.path.join(task_dir, "final-1.mp4")
+        audio_path = os.path.join(task_dir, "audio.mp3")
+        subtitle_path = os.path.join(task_dir, "subtitle.srt")
         Path(video_path).write_bytes(b"fake-video")
+        Path(audio_path).write_bytes(b"fake-audio")
+        Path(subtitle_path).write_text("subtitle", encoding="utf-8")
 
         try:
             sm.state.update_task(
@@ -305,6 +412,8 @@ class TestVideoControllerTasks(unittest.TestCase):
                 state=const.TASK_STATE_COMPLETE,
                 videos=[video_path],
                 combined_videos=[video_path],
+                audio_file=audio_path,
+                subtitle_path=subtitle_path,
                 cross_post_owner="localhost:123:internal",
             )
             with patch.dict(config.app, {"endpoint": ""}):
@@ -316,6 +425,8 @@ class TestVideoControllerTasks(unittest.TestCase):
                 response["data"]["videos"],
                 [f"/tasks/{task_id}/final-1.mp4"],
             )
+            self.assertEqual(response["data"]["audio_file"], f"/tasks/{task_id}/audio.mp3")
+            self.assertEqual(response["data"]["subtitle_path"], f"/tasks/{task_id}/subtitle.srt")
             self.assertNotIn("cross_post_owner", response["data"])
             self.assertIn("cross_post_owner", sm.state.get_task(task_id))
             self.assertEqual(sm.state.get_task(task_id)["videos"], [video_path])
@@ -452,7 +563,13 @@ class TestVideoControllerTasks(unittest.TestCase):
 
 
 class TestVideoControllerCreateHTTP(unittest.TestCase):
-    """验证越界字体在真实 HTTP 入口返回 400，而不是创建后台任务。"""
+    """验证越界字体在真实 HTTP 入口返回 403/404，而不是创建后台任务。
+
+    行为变更（PR #1664）：create_task 的字体预检改走文件服务包装
+    `_resolve_path_within_directory`，越界/穿越返回 403、字体缺失返回
+    404，与同一文件里任务产物端点的错误码保持一致；400 只留给请求体
+    数值校验等 ValueError 场景。
+    """
 
     def setUp(self):
         self.original_app_config = dict(config.app)
@@ -470,8 +587,28 @@ class TestVideoControllerCreateHTTP(unittest.TestCase):
                 json={"video_subject": "Coffee", "font_name": "../../README.md"},
             )
 
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 403)
         add_task.assert_not_called()
+
+
+class TestVideoControllerListHTTP(unittest.TestCase):
+    def test_task_page_size_is_bounded_before_state_scan(self):
+        """A client cannot request an unbounded Redis scan and response body."""
+        with (
+            patch.dict(config.app, {"api_key": ""}),
+            patch.object(
+                video_controller.sm.state,
+                "get_all_tasks",
+                return_value=([], 0),
+            ) as get_all,
+        ):
+            client = TestClient(asgi.app)
+            allowed = client.get("/api/v1/tasks?page_size=1000")
+            rejected = client.get("/api/v1/tasks?page_size=1001")
+
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(rejected.status_code, 400)
+        get_all.assert_called_once_with(1, 1000)
 
 
 class TestVideoControllerDeleteHTTP(unittest.TestCase):
@@ -546,7 +683,7 @@ class TestVideoControllerFiles(unittest.TestCase):
         headers = {"x-task-id": "request-123"}
         if range_header is not None:
             headers["Range"] = range_header
-        return SimpleNamespace(headers=headers)
+        return SimpleNamespace(headers=headers, method="GET")
 
     def test_upload_video_material_validates_complete_extension(self):
         """大写合法扩展名应接受，无点号伪扩展名应拒绝。"""
@@ -623,6 +760,57 @@ class TestVideoControllerFiles(unittest.TestCase):
         self.assertEqual(response.headers["content-range"], "bytes 2-5/10")
         self.assertEqual(response.headers["content-length"], "4")
         self.assertEqual(body, b"2345")
+
+    def test_stream_video_without_range_returns_complete_response(self):
+        """A normal GET must return the whole video as 200, not partial content."""
+
+        async def consume(response):
+            return b"".join([chunk async for chunk in response.body_iterator])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            Path(temp_dir, "clip.mp4").write_bytes(b"0123456789")
+            with patch.object(video_controller.utils, "task_dir", return_value=temp_dir):
+                response = asyncio.run(
+                    video_controller.stream_video(self._request(), "clip.mp4")
+                )
+                body = asyncio.run(consume(response))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("content-range", response.headers)
+        self.assertEqual(response.headers["accept-ranges"], "bytes")
+        self.assertEqual(response.headers["content-length"], "10")
+        self.assertEqual(body, b"0123456789")
+
+    def test_stream_video_keeps_file_open_after_response_is_created(self):
+        """Streaming must not reopen a file after sending the headers."""
+
+        async def consume(response):
+            return b"".join([chunk async for chunk in response.body_iterator])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            Path(temp_dir, "clip.mp4").write_bytes(b"0123456789")
+            with patch.object(video_controller.utils, "task_dir", return_value=temp_dir):
+                response = asyncio.run(
+                    video_controller.stream_video(self._request("bytes=2-5"), "clip.mp4")
+                )
+                with patch("builtins.open", side_effect=OSError("file vanished")):
+                    body = asyncio.run(consume(response))
+
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.headers["content-range"], "bytes 2-5/10")
+        self.assertEqual(body, b"2345")
+
+    def test_stream_video_returns_404_if_file_disappears_before_open(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            Path(temp_dir, "clip.mp4").write_bytes(b"video")
+            with (
+                patch.object(video_controller.utils, "task_dir", return_value=temp_dir),
+                patch("builtins.open", side_effect=FileNotFoundError),
+            ):
+                with self.assertRaises(HttpException) as raised:
+                    asyncio.run(video_controller.stream_video(self._request(), "clip.mp4"))
+
+        self.assertEqual(raised.exception.status_code, 404)
 
     def test_download_video_uses_resolved_file(self):
         """下载响应应使用白名单目录解析后的真实路径和原始文件名。"""
@@ -705,6 +893,27 @@ class TestBuildRedisUrl(unittest.TestCase):
             _build_redis_url("redis-host", 6380, 1, "s3cr3t"),
             "redis://:s3cr3t@redis-host:6380/1",
         )
+
+    def test_reserved_characters_in_password_round_trip_through_redis_url(self):
+        from app.controllers.v1.video import _build_redis_url
+
+        password = "p@ss:/?#% word"
+        url = _build_redis_url("redis-host", 6380, 1, password)
+
+        self.assertEqual(
+            redis.Redis.from_url(url).connection_pool.connection_kwargs["password"],
+            password,
+        )
+
+    def test_ipv6_host_round_trips_through_redis_url(self):
+        from app.controllers.v1.video import _build_redis_url
+
+        url = _build_redis_url("::1", 6380, 1, None)
+        connection = redis.Redis.from_url(url).connection_pool.connection_kwargs
+
+        self.assertEqual(connection["host"], "::1")
+        self.assertEqual(connection["port"], 6380)
+        self.assertEqual(connection["db"], 1)
 
 
 if __name__ == "__main__":
