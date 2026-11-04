@@ -125,6 +125,69 @@ def font_dir(sub_dir: str = ""):
     return d
 
 
+def resolve_default_font(available_fonts: list[str], configured_font: str = "") -> str:
+    """
+    Retorna a melhor fonte padrão priorizando Arial, Montserrat, Roboto ou Helvetica.
+    Se o usuário já tiver uma fonte explicitamente configurada (que não seja fonte chinesa legada),
+    mantém a escolha do usuário se ela existir na lista.
+    """
+    if not available_fonts:
+        return "Arial.ttf"
+
+    legacy_fonts = {
+        "MicrosoftYaHeiBold.ttc",
+        "MicrosoftYaHeiNormal.ttc",
+        "STHeitiMedium.ttc",
+        "STHeitiLight.ttc",
+    }
+    if (
+        configured_font
+        and configured_font in available_fonts
+        and configured_font not in legacy_fonts
+    ):
+        return configured_font
+
+    # Prioridade solicitada: Arial, Montserrat, Roboto, Helvetica
+    preferred_exact = [
+        "Arial.ttf",
+        "Arial-Bold.ttf",
+        "Montserrat-Bold.ttf",
+        "Montserrat-Regular.ttf",
+        "Roboto-Bold.ttf",
+        "Roboto-Regular.ttf",
+        "Helvetica.ttc",
+    ]
+    for candidate in preferred_exact:
+        if candidate in available_fonts:
+            return candidate
+
+    for prefix in ["arial", "montserrat", "roboto", "helvetica"]:
+        for f in available_fonts:
+            if f.lower().startswith(prefix):
+                return f
+
+    for keyword in ["arial", "montserrat", "roboto", "helvetica"]:
+        for f in available_fonts:
+            if keyword in f.lower():
+                return f
+
+    if configured_font and configured_font in available_fonts:
+        return configured_font
+
+    return available_fonts[0]
+
+
+def get_default_font_name() -> str:
+    """
+    Retorna o nome do arquivo da fonte padrão instalada no diretório de fontes.
+    """
+    d = font_dir()
+    available = []
+    if os.path.exists(d):
+        available = [f for f in os.listdir(d) if f.endswith((".ttf", ".ttc"))]
+    return resolve_default_font(available)
+
+
 def song_dir(sub_dir: str = ""):
     d = resource_dir("songs")
     if sub_dir:
@@ -547,3 +610,73 @@ def load_locales(i18n_dir):
 
 def parse_extension(filename):
     return Path(filename).suffix.lower().lstrip('.')
+
+
+def parse_scene_prompts(text: str | list | None) -> list[str]:
+    """
+    Extrai e limpa prompts de cenas ou palavras-chave a partir de texto bruto.
+    Reconhece múltiplos formatos de entrada, tais como:
+      - 'Cena 1 (0:00 - 0:45): 2D doodle on notebook, 16:9'
+      - 'Scene 2: illustration of Santos Dumont...'
+      - 'Take 3 - biplane flying...'
+      - '1. Prompt numerado...'
+      - Linhas individuais ou termos separados por vírgula.
+    Remove cabeçalhos de cena, timestamps e sufixos de proporção (, 16:9).
+    """
+    if not text:
+        return []
+
+    if isinstance(text, (list, tuple)):
+        text = "\n".join(str(t).strip() for t in text if str(t).strip())
+
+    text = str(text).strip()
+    if not text:
+        return []
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    scene_pattern = re.compile(
+        r"^(?:cena|scene|take|quadro|shot)\s*\d+(?:\s*\(.*?\))?[:\-]\s*(.+)$",
+        re.IGNORECASE,
+    )
+    numbered_pattern = re.compile(r"^\d+[\.\-\)](?:\s*\(.*?\))?[:\-]?\s+(.+)$")
+    ratio_suffix = re.compile(
+        r"[,;\s]+(?:16:9|9:16|1:1|4:3|landscape|portrait)\s*$",
+        re.IGNORECASE,
+    )
+
+    if len(lines) == 1 and not scene_pattern.match(lines[0]) and not numbered_pattern.match(lines[0]):
+        single_line = lines[0]
+        if ";" in single_line or "；" in single_line:
+            parts = [p.strip() for p in re.split(r"[;；]", single_line) if p.strip()]
+        elif "," in single_line or "，" in single_line:
+            parts = [p.strip() for p in re.split(r"[,，]", single_line) if p.strip()]
+        else:
+            parts = [single_line]
+        return [ratio_suffix.sub("", p).strip() for p in parts if p.strip()]
+
+    prompts: list[str] = []
+    for line in lines:
+        if line.lower().startswith(("parte ", "part ", "prompts visuais", "prompt visual", "#", "//")):
+            if not scene_pattern.match(line):
+                continue
+
+        m = scene_pattern.match(line)
+        if m:
+            clean = m.group(1).strip()
+        else:
+            m_num = numbered_pattern.match(line)
+            if m_num:
+                clean = m_num.group(1).strip()
+            else:
+                clean = line.strip()
+
+        clean = ratio_suffix.sub("", clean).strip()
+        if clean:
+            prompts.append(clean)
+
+    return prompts
+
+

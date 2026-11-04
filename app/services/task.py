@@ -311,9 +311,61 @@ def generate_script(task_id, params):
     return video_script
 
 
+def _combine_script_phrases_with_terms(video_script: str, video_terms: list, clip_duration: int = 6) -> list:
+    """
+    Soma cada frase/trecho do roteiro com as palavras-chave de geração de vídeo/imagem,
+    garantindo que o modelo receba o contexto narrativo do momento somado ao estilo visual.
+    """
+    clean_text = utils.remove_pause_tags(video_script or "").strip()
+    if not clean_text or not video_terms:
+        return video_terms
+
+    sentences = [s.strip() for s in utils.split_string_by_punctuations(clean_text) if s.strip()]
+    if not sentences:
+        return video_terms
+
+    words_per_clip = max(10, int(clip_duration * 3.0))
+    script_chunks = []
+    cur_chunk = []
+    cur_words = 0
+
+    for s in sentences:
+        cur_chunk.append(s)
+        cur_words += len(s.split())
+        if cur_words >= words_per_clip:
+            script_chunks.append(". ".join(cur_chunk))
+            cur_chunk = []
+            cur_words = 0
+    if cur_chunk:
+        script_chunks.append(". ".join(cur_chunk))
+
+    if not script_chunks:
+        return video_terms
+
+    combined = []
+    total_chunks = len(script_chunks)
+    terms_count = len(video_terms)
+
+    for i in range(total_chunks):
+        chunk = script_chunks[i]
+        if terms_count == total_chunks:
+            term = video_terms[i]
+        else:
+            term = ", ".join(video_terms)
+
+        if chunk.lower() in term.lower():
+            combined_prompt = term
+        else:
+            combined_prompt = f"{chunk}, {term}" if term else chunk
+        combined.append(combined_prompt)
+
+    return combined
+
+
 def generate_terms(task_id, params, video_script):
     logger.info("\n\n## generating video terms")
     video_terms = params.video_terms
+    user_explicit_terms = bool(video_terms)
     is_ai_material = params.video_source in (
         "comfyui", "comfyui_wan", "drawthings", "draw_things", "openai_image",
         "wavespeed", "volcengine_seedance", "ofox", "metaso_minimax", "muapi"
@@ -321,7 +373,7 @@ def generate_terms(task_id, params, video_script):
     match_order = params.match_materials_to_script or is_ai_material
     if not video_terms:
         clean_text = utils.remove_pause_tags(video_script or "").strip()
-        clip_dur = max(1, getattr(params, "video_clip_duration", 5) or 5)
+        clip_dur = max(1, getattr(params, "video_clip_duration", 6) or 6)
         words = clean_text.split()
         if len(words) > 8:
             est_seconds = len(words) / 2.5
@@ -336,29 +388,36 @@ def generate_terms(task_id, params, video_script):
             match_script_order=match_order,
         )
     else:
-        if isinstance(video_terms, list):
-            raw_terms = [str(term).strip() for term in video_terms if str(term).strip()]
-        elif isinstance(video_terms, str):
-            text = video_terms.strip()
-            if text.startswith("[") and text.endswith("]"):
-                try:
-                    parsed = json.loads(text)
-                    if isinstance(parsed, list):
-                        raw_terms = [str(t).strip() for t in parsed if str(t).strip()]
-                    else:
-                        raw_terms = [text]
-                except Exception:
-                    raw_terms = [text]
-            elif "\n" in text:
-                raw_terms = [line.strip().lstrip("0123456789.-*•) ") for line in text.split("\n") if line.strip()]
-            elif ";" in text or "；" in text:
-                raw_terms = [p.strip() for p in re.split(r"[;；]", text) if p.strip()]
-            else:
-                raw_terms = [p.strip() for p in re.split(r"[,，]", text) if p.strip()]
+        # Extrai prompts individuais de cenas (ex: "Cena 1 (0:00 - 0:45): ...") ou termos
+        parsed_scene_terms = utils.parse_scene_prompts(video_terms)
+        if parsed_scene_terms:
+            video_terms = parsed_scene_terms
         else:
-            raise ValueError("video_terms must be a string or a list of strings.")
+            if isinstance(video_terms, list):
+                raw_terms = [str(term).strip() for term in video_terms if str(term).strip()]
+            elif isinstance(video_terms, str):
+                text = video_terms.strip()
+                if text.startswith("[") and text.endswith("]"):
+                    try:
+                        parsed = json.loads(text)
+                        if isinstance(parsed, list):
+                            raw_terms = [str(t).strip() for t in parsed if str(t).strip()]
+                        else:
+                            raw_terms = [text]
+                    except Exception:
+                        raw_terms = [text]
+                elif "\n" in text:
+                    raw_terms = [line.strip().lstrip("0123456789.-*•) ") for line in text.split("\n") if line.strip()]
+                elif ";" in text or "；" in text:
+                    raw_terms = [p.strip() for p in re.split(r"[;；]", text) if p.strip()]
+                else:
+                    raw_terms = [p.strip() for p in re.split(r"[,，]", text) if p.strip()]
+            else:
+                raise ValueError("video_terms must be a string or a list of strings.")
 
-        video_terms = llm.sanitize_and_merge_terms(raw_terms)
+            video_terms = llm.sanitize_and_merge_terms(raw_terms)
+
+        logger.info(f"user provided {len(video_terms)} explicit scene/term prompts")
         logger.debug(f"video terms: {utils.to_json(video_terms)}")
 
     if not video_terms:
@@ -369,11 +428,21 @@ def generate_terms(task_id, params, video_script):
         )
         return None
 
-    if not match_order:
-        video_terms = twelvelabs.rerank_terms_by_subject(
-            video_subject=params.video_subject,
-            search_terms=video_terms,
-        )
+    # Quando o usuário fornece explicitamente suas cenas/prompts, cada cena é mantida
+    # como um vídeo individual diferente sem juntar todos os termos em um bloco repetido.
+    if not user_explicit_terms:
+        if not match_order:
+            video_terms = twelvelabs.rerank_terms_by_subject(
+                video_subject=params.video_subject,
+                search_terms=video_terms,
+            )
+        elif is_ai_material:
+            clip_dur = max(1, getattr(params, "video_clip_duration", 6) or 6)
+            video_terms = _combine_script_phrases_with_terms(
+                video_script=video_script,
+                video_terms=video_terms,
+                clip_duration=clip_dur,
+            )
 
     return video_terms
 
@@ -1053,6 +1122,37 @@ def generate_final_videos(
 
         _progress += 50 / params.video_count / 2
         sm.state.update_task(task_id, progress=_progress)
+
+        # Attach channel opening (intro) and ending (outro) if configured and enabled
+        is_bumper_enabled = getattr(params, "channel_bumper_enabled", None)
+        if is_bumper_enabled is None:
+            is_bumper_enabled = bool(config.app.get("channel_bumper_enabled", False))
+
+        if is_bumper_enabled:
+            bumper_folder = getattr(params, "channel_bumper_folder", "") or config.app.get("channel_bumper_folder", "")
+            opening_vid = ""
+            ending_vid = ""
+            if bumper_folder and os.path.isdir(bumper_folder):
+                candidate_open = os.path.join(bumper_folder, "abertura.mp4")
+                if os.path.isfile(candidate_open):
+                    opening_vid = candidate_open
+                candidate_end = os.path.join(bumper_folder, "final.mp4")
+                if os.path.isfile(candidate_end):
+                    ending_vid = candidate_end
+
+            # Also allow explicit override from params or config
+            opening_vid = getattr(params, "opening_video", "") or opening_vid or config.app.get("opening_video", "")
+            ending_vid = getattr(params, "ending_video", "") or ending_vid or config.app.get("ending_video", "")
+
+            if opening_vid or ending_vid:
+                try:
+                    video.attach_intro_outro(
+                        main_video_path=final_video_path,
+                        opening_video=opening_vid,
+                        ending_video=ending_vid,
+                    )
+                except Exception as e:
+                    logger.warning(f"failed to attach intro/outro: {e}")
 
         final_video_paths.append(final_video_path)
         combined_video_paths.append(combined_video_path)

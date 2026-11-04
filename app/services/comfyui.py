@@ -24,11 +24,11 @@ DEFAULT_FPS = 16
 DEFAULT_SAMPLER = "euler"
 DEFAULT_SCHEDULER = "simple"
 DEFAULT_PROMPT_TEMPLATE = (
-    "{term}, detailed photorealistic wildlife documentary footage, natural lighting, sharp textures, high resolution"
+    "{term}, animated notebook doodle style, cute colorful marker sketch on spiral lined notebook paper, clean wooden desk background, vibrant educational illustration, high resolution"
 )
 DEFAULT_NEGATIVE_PROMPT = (
-    "bright tones, overexposed, static, blurry details, cartoon, anime, 3d render, painting, drawing, "
-    "illustration, plastic, fake, low quality, worst quality, artifacts, watermark"
+    "photorealistic, real life photo, realistic animals, wildlife documentary, cgi, 3d render, "
+    "plastic, fake, low quality, worst quality, blurry, distorted, deformation, static, artifacts"
 )
 DEFAULT_POLL_INTERVAL_SECONDS = 3.0
 DEFAULT_RUN_TIMEOUT_SECONDS = 14400.0
@@ -254,6 +254,118 @@ def build_wan_workflow(
     }
 
 
+def build_minimax_workflow(
+    positive_prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    frame_count: int,
+    steps: int = 8,
+    cfg: float = 1.0,
+    seed: int = 42,
+    fps: int = 24,
+) -> dict[str, Any]:
+    """Constructs the prompt graph for ComfyUI MiniMax H3 Local Video Generation."""
+    return {
+        "1": {
+            "inputs": {
+                "unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+                "weight_dtype": "default",
+            },
+            "class_type": "UNETLoader",
+        },
+        "2": {
+            "inputs": {
+                "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                "type": "minimax",
+                "device": "cpu",
+            },
+            "class_type": "CLIPLoader",
+        },
+        "3": {
+            "inputs": {
+                "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors",
+            },
+            "class_type": "VAELoader",
+        },
+        "4": {
+            "inputs": {
+                "model": ["1", 0],
+                "shift_video": 12.0,
+                "shift_audio": 3.0,
+            },
+            "class_type": "MiniMaxH3SigmaShift",
+        },
+        "5": {
+            "inputs": {
+                "model": ["4", 0],
+                "lora_name": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+                "strength_model": 1.0,
+            },
+            "class_type": "LoraLoaderModelOnly",
+        },
+        "6": {
+            "inputs": {
+                "text": positive_prompt,
+                "clip": ["2", 0],
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "7": {
+            "inputs": {
+                "text": negative_prompt,
+                "clip": ["2", 0],
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "8": {
+            "inputs": {
+                "width": width,
+                "height": height,
+                "length": max(5, frame_count),
+            },
+            "class_type": "EmptyMiniMaxH3LatentAV",
+        },
+        "9": {
+            "inputs": {
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["5", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["8", 0],
+            },
+            "class_type": "KSampler",
+        },
+        "10": {
+            "inputs": {
+                "samples": ["9", 0],
+                "vae": ["3", 0],
+            },
+            "class_type": "VAEDecode",
+        },
+        "11": {
+            "inputs": {
+                "fps": float(fps),
+                "images": ["10", 0],
+            },
+            "class_type": "CreateVideo",
+        },
+        "12": {
+            "inputs": {
+                "filename_prefix": "video/MPT_MiniMax",
+                "format": "auto",
+                "video": ["11", 0],
+            },
+            "class_type": "SaveVideo",
+        },
+    }
+
+
 def build_qwen_image_workflow(
     positive_prompt: str,
     negative_prompt: str,
@@ -275,7 +387,7 @@ def build_qwen_image_workflow(
         "2": {
             "inputs": {
                 "clip_name": str(config.app.get("comfyui_qwen_clip", "qwen3vl_8b_int8_convrot.safetensors") or "qwen3vl_8b_int8_convrot.safetensors").strip(),
-                "type": "sdxl",
+                "type": "qwen_image",
             },
             "class_type": "CLIPLoader",
         },
@@ -339,6 +451,27 @@ def build_qwen_image_workflow(
     }
 
 
+def _minimax_resolution_for_aspect(aspect: VideoAspect) -> tuple[int, int]:
+    """Return compact dimensions for MiniMax H3 to ensure fast generation on Mac MPS."""
+    if aspect == VideoAspect.landscape:
+        return 576, 320
+    elif aspect == VideoAspect.portrait:
+        return 320, 576
+    elif aspect == VideoAspect.square:
+        return 448, 448
+    return 576, 320
+
+
+def _calculate_minimax_frame_count(duration_seconds: int, fps: int = 24) -> int:
+    """
+    MiniMax H3 uses 17*k + 5 frames at 24 fps.
+    For example: 22 (~0.9s), 56 (~2.3s), 90 (~3.8s), 124 (~5.2s), 141 (~5.9s ~6s).
+    """
+    target = max(1, duration_seconds) * fps
+    k = max(1, round((target - 5) / 17))
+    return int(17 * k + 5)
+
+
 def generate_video(
     search_term: str,
     video_aspect: VideoAspect,
@@ -347,7 +480,7 @@ def generate_video(
     seed: int | None = None,
 ) -> tuple[str | None, int]:
     """
-    Submits a Wan 2.1 video generation request to ComfyUI, waits for completion,
+    Submits a Wan 2.1 or MiniMax H3 video generation request to ComfyUI, waits for completion,
     and returns (saved_local_path, actual_duration_seconds).
     """
     base_url = _base_url()
@@ -361,22 +494,46 @@ def generate_video(
     actual_duration = max(1, round(frame_count / fps))
     actual_seed = random.randint(1, 10**14) if seed is None else seed
 
-    logger.info(
-        f"ComfyUI Wan 2.1 video request: term={search_term!r}, prompt={positive_prompt!r}, "
-        f"resolution={width}x{height}, frames={frame_count}, steps={steps}, fps={fps}"
-    )
+    current_model = _wan_model()
+    is_minimax = "minimax" in current_model.lower()
 
-    workflow = build_wan_workflow(
-        positive_prompt=positive_prompt,
-        negative_prompt=negative_prompt,
-        width=width,
-        height=height,
-        frame_count=frame_count,
-        steps=steps,
-        cfg=cfg,
-        seed=actual_seed,
-        fps=fps,
-    )
+    if is_minimax:
+        mm_fps = 24
+        mm_width, mm_height = _minimax_resolution_for_aspect(video_aspect)
+        mm_frame_count = _calculate_minimax_frame_count(duration, mm_fps)
+        actual_duration = max(1, round(mm_frame_count / mm_fps))
+        mm_steps = 4  # Ultra-otimizado com Turbo LoRA para melhor desempenho no Mac MPS
+        logger.info(
+            f"ComfyUI MiniMax H3 fast video request: term={search_term!r}, prompt={positive_prompt!r}, "
+            f"resolution={mm_width}x{mm_height}, frames={mm_frame_count} (~{actual_duration}s), steps={mm_steps} (turbo)"
+        )
+        workflow = build_minimax_workflow(
+            positive_prompt=positive_prompt,
+            negative_prompt=negative_prompt,
+            width=mm_width,
+            height=mm_height,
+            frame_count=mm_frame_count,
+            steps=mm_steps,
+            cfg=1.0,
+            seed=actual_seed,
+            fps=mm_fps,
+        )
+    else:
+        logger.info(
+            f"ComfyUI Wan 2.1 video request: term={search_term!r}, prompt={positive_prompt!r}, "
+            f"resolution={width}x{height}, frames={frame_count}, steps={steps}, fps={fps}"
+        )
+        workflow = build_wan_workflow(
+            positive_prompt=positive_prompt,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            frame_count=frame_count,
+            steps=steps,
+            cfg=cfg,
+            seed=actual_seed,
+            fps=fps,
+        )
 
     try:
         resp = requests.post(

@@ -194,7 +194,7 @@ LOOMLOOM_VIDEO_MODEL_PRICES = (
 )
 DEFAULT_SUBTITLE_SETTINGS = {
     "subtitle_enabled": True,
-    "font_name": "MicrosoftYaHeiBold.ttc",
+    "font_name": "Arial.ttf",
     "subtitle_position": "bottom",
     "subtitle_display_mode": "sentence",
     "subtitle_animation": "none",
@@ -1494,7 +1494,7 @@ def _apply_restored_params(params):
         params.get("video_fit_mode") or VideoFitMode.cover.value,
     )
     _set_stable_widget_value(
-        "video_clip_duration_select", params.get("video_clip_duration", 3)
+        "video_clip_duration_select", params.get("video_clip_duration", 6)
     )
     _set_stable_widget_value(
         "video_clip_speed_slider",
@@ -2479,7 +2479,13 @@ def reset_script_system_prompt():
 
 def reset_subtitle_settings():
     """恢复 WebUI 字幕控件和持久化配置中的默认值。"""
-    defaults = DEFAULT_SUBTITLE_SETTINGS
+    defaults = dict(DEFAULT_SUBTITLE_SETTINGS)
+    font_names = get_all_fonts()
+    defaults["font_name"] = (
+        utils.resolve_default_font(font_names, defaults["font_name"])
+        if font_names
+        else defaults["font_name"]
+    )
     st.session_state["subtitle_enabled_checkbox"] = defaults["subtitle_enabled"]
     _set_stable_widget_value("font_name_select", defaults["font_name"])
     _set_stable_widget_value("subtitle_position_select", defaults["subtitle_position"])
@@ -4061,14 +4067,14 @@ def _render_settings_dialog():
 
                 comfyui_prompt_template = st.text_area(
                     "Prompt Template (Positivo)",
-                    value=str(config.app.get("comfyui_prompt_template", "{term}, photorealistic, raw footage, National Geographic wildlife documentary, ultra-realistic textures, natural daylight, sharp focus, 8k uhd")),
+                    value=str(config.app.get("comfyui_prompt_template", "{term}, animated notebook doodle style, cute colorful marker sketch on spiral lined notebook paper, clean wooden desk background, vibrant educational illustration, high resolution")),
                     key="comfyui_prompt_template_input",
                 )
                 _set_runtime_config("app", "comfyui_prompt_template", comfyui_prompt_template.strip())
 
                 comfyui_negative_prompt = st.text_area(
                     "Negative Prompt (Negativo)",
-                    value=str(config.app.get("comfyui_negative_prompt", "cgi, 3d render, illustration, cartoon, anime, drawing, painting, stylized, artificial, plastic, fake, low quality, worst quality, blurry, distorted, deformation, static, artifacts")),
+                    value=str(config.app.get("comfyui_negative_prompt", "photorealistic, real life photo, realistic animals, wildlife documentary, cgi, 3d render, plastic, fake, low quality, worst quality, blurry, distorted, deformation, static, artifacts")),
                     key="comfyui_negative_prompt_input",
                 )
                 _set_runtime_config("app", "comfyui_negative_prompt", comfyui_negative_prompt.strip())
@@ -5158,9 +5164,14 @@ def _render_script_settings(panel, params):
 
             params.video_terms = st.text_area(
                 tr("Video Keywords"),
-                help=tr("Video Keywords Help"),
+                help="Cole palavras-chave ou a lista de cenas completas (ex: Cena 1 (0:00 - 0:45): prompt, 16:9). Cada cena terá um vídeo diferente gerado localmente pelo ComfyUI.",
                 key="video_terms",
             )
+            detected_scenes = utils.parse_scene_prompts(params.video_terms or "")
+            if detected_scenes and len(detected_scenes) > 1:
+                st.caption(
+                    f"🎬 **{len(detected_scenes)} cenas diferentes detectadas** para geração de vídeos distintos no ComfyUI."
+                )
 
 
 def _render_video_settings(panel, params):
@@ -5189,13 +5200,16 @@ def _render_video_settings(panel, params):
                 "local": tr("Local file"),
             }
             saved_video_source_name = str(
-                config.app.get("video_source", "pexels") or "pexels"
+                config.app.get("video_source", "comfyui_wan") or "comfyui_wan"
             )
+            if st.session_state.get("video_source_select") == "pexels":
+                st.session_state["video_source_select"] = saved_video_source_name
+
             params.video_source = grouped_selectbox(
                 tr("Video Source"),
                 groups=(
-                    (tr("Stock Video"), VIDEO_SOURCE_GROUPS["stock_video"]),
                     (tr("AI Video"), VIDEO_SOURCE_GROUPS["ai_video"]),
+                    (tr("Stock Video"), VIDEO_SOURCE_GROUPS["stock_video"]),
                     (tr("AI Image"), VIDEO_SOURCE_GROUPS["ai_image"]),
                     (tr("Local Material"), VIDEO_SOURCE_GROUPS["local"]),
                 ),
@@ -5216,21 +5230,35 @@ def _render_video_settings(panel, params):
                 )
 
             if params.video_source == "comfyui_wan":
-                current_wan_model = str(config.app.get("comfyui_wan_model", "wan2.1_t2v_14B_fp8_e4m3fn.safetensors") or "wan2.1_t2v_14B_fp8_e4m3fn.safetensors")
+                current_wan_model = str(
+                    config.app.get(
+                        "comfyui_wan_model",
+                        "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+                    )
+                    or "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+                )
                 wan_options = [
+                    ("minimax_h3_fl2va_pruned_int8_convrot.safetensors", "MiniMax H3 Local (Otimizado Mac MPS / Turbo LoRA)"),
+                    ("wan2.1_t2v_1.3B_bf16.safetensors", "Wan 2.1 1.3B (Ultra Rápido ~2.8 min)"),
                     ("wan2.1_t2v_14B_fp8_e4m3fn.safetensors", "Wan 2.1 14B (Alta Qualidade / Mais Lento)"),
-                    ("wan2.1_t2v_1.3B_bf16.safetensors", "Wan 2.1 1.3B (Rápido / Leve)"),
                 ]
-                wan_model_idx = 0 if "14B" in current_wan_model else 1
+                wan_model_idx = 0
+                for idx, (m_id, _) in enumerate(wan_options):
+                    if m_id == current_wan_model:
+                        wan_model_idx = idx
+                        break
                 selected_wan_model = st.selectbox(
-                    "Modelo Wan 2.1",
+                    "Modelo ComfyUI Local",
                     options=[opt[0] for opt in wan_options],
                     index=wan_model_idx,
                     format_func=lambda x: dict(wan_options).get(x, x),
                     key="comfyui_wan_model_quick_select",
                 )
                 _set_runtime_config("app", "comfyui_wan_model", selected_wan_model)
-                st.caption("Gera clipes de vídeo no ComfyUI local via Wan 2.1 Text-to-Video.")
+                if "minimax" in selected_wan_model.lower():
+                    st.caption("Gera clipes de vídeo localmente no ComfyUI via MiniMax H3 (resolução adaptada e Turbo LoRA).")
+                else:
+                    st.caption("Gera clipes de vídeo localmente no ComfyUI via Wan 2.1 Text-to-Video.")
 
             if params.video_source == "drawthings":
                 dt_models = [
@@ -5453,9 +5481,7 @@ def _render_video_settings(panel, params):
                 default_value=_saved_ui_choice(
                     "video_clip_duration",
                     video_clip_durations,
-                    5
-                    if params.video_source in {"metaso_minimax", "muapi"}
-                    else 3,
+                    6,
                 ),
                 key="video_clip_duration_select",
                 help=tr("Clip Duration Help"),
@@ -5526,6 +5552,52 @@ def _render_video_settings(panel, params):
                 _delete_runtime_config("app", "video_codec")
             else:
                 _set_runtime_config("app", "video_codec", selected_video_codec)
+
+            st.markdown("---")
+            st.markdown("**Vinhetas do Canal (Abertura e Encerramento)**")
+            channel_bumper_enabled = st.checkbox(
+                "Adicionar Abertura e Encerramento ao vídeo final",
+                value=bool(config.app.get("channel_bumper_enabled", True)),
+                key="channel_bumper_enabled_checkbox",
+                help="Se ativado, cola automaticamente a abertura no início e o final no encerramento do vídeo.",
+            )
+            params.channel_bumper_enabled = channel_bumper_enabled
+            _set_runtime_config("app", "channel_bumper_enabled", channel_bumper_enabled)
+
+            if channel_bumper_enabled:
+                saved_bumper_folder = str(
+                    config.app.get(
+                        "channel_bumper_folder", "/Users/leandrobocon/Projects/cadernoanimado"
+                    )
+                    or "/Users/leandrobocon/Projects/cadernoanimado"
+                )
+                channel_bumper_folder = st.text_input(
+                    "Pasta das Vinhetas (contém abertura.mp4 e final.mp4)",
+                    value=saved_bumper_folder,
+                    key="channel_bumper_folder_input",
+                    help="Indique a pasta que contém abertura.mp4 e final.mp4",
+                )
+                params.channel_bumper_folder = channel_bumper_folder.strip()
+                _set_runtime_config("app", "channel_bumper_folder", params.channel_bumper_folder)
+
+                abertura_path = os.path.join(params.channel_bumper_folder, "abertura.mp4")
+                final_path = os.path.join(params.channel_bumper_folder, "final.mp4")
+
+                col_ab, col_fn = st.columns(2)
+                with col_ab:
+                    if os.path.isfile(abertura_path):
+                        st.success("✅ abertura.mp4 detectada")
+                        params.opening_video = abertura_path
+                    else:
+                        st.warning("⚠️ abertura.mp4 não encontrada")
+                        params.opening_video = ""
+                with col_fn:
+                    if os.path.isfile(final_path):
+                        st.success("✅ final.mp4 detectada")
+                        params.ending_video = final_path
+                    else:
+                        st.warning("⚠️ final.mp4 não encontrada")
+                        params.ending_video = ""
 
             if params.video_source == "loomloom":
                 _render_loomloom_video_settings(params)
@@ -7644,9 +7716,21 @@ def _render_subtitle_settings(panel, params):
             saved_font_name = config.ui.get(
                 "font_name", DEFAULT_SUBTITLE_SETTINGS["font_name"]
             )
-            saved_font_name_index = 0
-            if saved_font_name in font_names:
-                saved_font_name_index = font_names.index(saved_font_name)
+            preferred_font = utils.resolve_default_font(font_names, saved_font_name)
+            font_widget_key = localized_widget_key("font_name_select")
+            if st.session_state.get(font_widget_key) in {
+                "MicrosoftYaHeiBold.ttc",
+                "MicrosoftYaHeiNormal.ttc",
+                "STHeitiMedium.ttc",
+                "STHeitiLight.ttc",
+            }:
+                st.session_state[font_widget_key] = preferred_font
+
+            saved_font_name_index = (
+                font_names.index(preferred_font)
+                if preferred_font in font_names
+                else 0
+            )
             params.font_name = stable_selectbox(
                 tr("Font"),
                 options=font_names,

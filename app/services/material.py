@@ -2659,7 +2659,7 @@ def _download_videos_comfyui_on_demand(
                 )
 
             total_duration += min(clip_duration, gen_dur)
-            if total_duration >= required_duration:
+            if total_duration >= required_duration and len(video_paths) >= len(search_terms):
                 logger.info(
                     "generated ComfyUI Wan 2.1 materials cover the required duration: "
                     f"generated={total_duration:.1f}s, required={required_duration:.1f}s"

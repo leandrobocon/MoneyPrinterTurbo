@@ -1238,7 +1238,7 @@ def generate_video(
     font_path = ""
     if params.subtitle_enabled:
         if not params.font_name:
-            params.font_name = "STHeitiMedium.ttc"
+            params.font_name = utils.get_default_font_name()
         # API 入口虽已预检，WebUI、CLI 和内部调用仍可直接进入渲染层；
         # 始终以真实路径校验字体必须留在 resource/fonts，阻断绝对路径、
         # ../ 穿越及指向目录外的符号链接，再交给 PIL/MoviePy 打开。
@@ -1528,6 +1528,85 @@ def generate_video(
             fps=fps,
         )
         return bgm_mix_succeeded
+
+
+def attach_intro_outro(
+    main_video_path: str,
+    opening_video: str = "",
+    ending_video: str = "",
+    output_path: str = None,
+) -> str:
+    """
+    Concat opening video (intro) and ending video (outro) to main video.
+    If neither exists, returns main_video_path untouched.
+    """
+    opening_exists = bool(opening_video and os.path.isfile(opening_video))
+    ending_exists = bool(ending_video and os.path.isfile(ending_video))
+    if not opening_exists and not ending_exists:
+        return main_video_path
+
+    if not output_path:
+        output_path = main_video_path
+
+    temp_output = f"{output_path}.intro_outro_temp.mp4"
+    inputs = []
+    if opening_exists:
+        inputs.append(opening_video)
+    inputs.append(main_video_path)
+    if ending_exists:
+        inputs.append(ending_video)
+
+    ffmpeg_bin = utils.get_ffmpeg_binary()
+
+    try:
+        main_clip = VideoFileClip(main_video_path)
+        target_w, target_h = main_clip.size
+        close_clip(main_clip)
+    except Exception:
+        target_w, target_h = 1920, 1080
+
+    cmd = [ffmpeg_bin, "-y"]
+    filter_complex_parts = []
+    concat_inputs = []
+
+    for idx, fpath in enumerate(inputs):
+        cmd.extend(["-i", fpath])
+        filter_complex_parts.append(
+            f"[{idx}:v]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+            f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{idx}];"
+            f"[{idx}:a]aformat=sample_rates=44100:channel_layouts=stereo[a{idx}];"
+        )
+        concat_inputs.append(f"[v{idx}][a{idx}]")
+
+    concat_chain = "".join(concat_inputs)
+    filter_complex_str = "".join(filter_complex_parts) + f"{concat_chain}concat=n={len(inputs)}:v=1:a=1[outv][outa]"
+    cmd.extend([
+        "-filter_complex", filter_complex_str,
+        "-map", "[outv]",
+        "-map", "[outa]",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        temp_output
+    ])
+
+    logger.info(f"attaching intro/outro: opening={opening_exists}, ending={ending_exists} -> {temp_output}")
+    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if res.returncode == 0 and os.path.isfile(temp_output):
+        if output_path == main_video_path:
+            os.replace(temp_output, main_video_path)
+            logger.success(f"intro/outro successfully attached to {main_video_path}")
+            return main_video_path
+        else:
+            os.replace(temp_output, output_path)
+            logger.success(f"intro/outro successfully attached to {output_path}")
+            return output_path
+    else:
+        logger.error(f"failed to attach intro/outro: {res.stderr}")
+        if os.path.isfile(temp_output):
+            os.remove(temp_output)
+        return main_video_path
 
 
 def render_image_zoom_video(image_path: str, clip_duration: int = 5) -> str:

@@ -45,7 +45,7 @@ def build_qwen_image_workflow(
         "2": {
             "inputs": {
                 "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
-                "type": "sdxl",
+                "type": "qwen_image",
             },
             "class_type": "CLIPLoader",
         },
@@ -65,7 +65,7 @@ def build_qwen_image_workflow(
         "5": {
             "inputs": {
                 "clip": ["2", 0],
-                "text": "low quality, worst quality, deformed, blurry, bad anatomy, artifacts, text, watermark",
+                "text": "photorealistic, real life photo, realistic animal, wildlife documentary, dark, depressing, horror, low quality, worst quality, deformed, blurry, bad anatomy, artifacts, watermark",
             },
             "class_type": "CLIPTextEncode",
         },
@@ -241,7 +241,7 @@ def generate_comfy_image(
         raise RuntimeError(f"ComfyUI returned no prompt_id: {res}")
     print(f"[Bridge] Prompt queued, id={prompt_id}. Waiting for completion...")
 
-    for _ in range(120):
+    for _ in range(180):
         time.sleep(2)
         try:
             hist = get_history(prompt_id, server_url)

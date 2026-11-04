@@ -214,6 +214,10 @@ def _extract_chat_completion_text(response, llm_provider: str) -> str:
         raise ValueError(f"[{llm_provider}] returned empty message")
 
     content = getattr(message, "content", None)
+    if not content:
+        reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
+        if reasoning:
+            content = reasoning
     return _normalize_text_response(content, llm_provider)
 
 
@@ -941,14 +945,15 @@ def generate_terms(
 
 ## Instructions & Constraints:
 1. Return ONLY a valid JSON array of strings (e.g. ["prompt 1", "prompt 2", ...]).
-2. Each search term must be a rich, descriptive, photorealistic scene prompt directly visualizing what is being discussed in that part of the video script:
+2. Each search term must be a rich, descriptive scene prompt directly visualizing what is being discussed in that part of the video script:
    - Specific Subject (what is in the scene, directly related to the script narrative)
    - Action / Motion (what is happening or moving)
    - Environment / Setting (location, atmosphere, time of day)
    - Lighting & Camera (e.g., golden hour sunlight, wide angle, macro close-up, soft bokeh)
 3. Ensure every generated scene is UNIQUE and does not repeat previously shown scenes.
-4. NEVER split a single scene into multiple array elements (e.g., do NOT put "wide angle view" or "sunlight glinting" as separate items).
-5. All descriptions MUST be in English only. Chinese or other languages are not accepted.
+4. CHARACTER & SUBJECT CONSISTENCY (CRITICAL): If the video/script features specific characters, people, animals, or subjects (e.g. a specific bird species or animal pair), you MUST maintain rigorous visual consistency across all scene prompts. Explicitly reuse the EXACT same distinctive physical traits, species, feather/clothing colors, markings, and artistic style in every prompt where the character appears (e.g., 'the same pair of peach-faced lovebirds: one with emerald green feathers and a coral-red face, the other with soft turquoise blue wings and pastel belly').
+5. NEVER split a single scene into multiple array elements (e.g., do NOT put "wide angle view" or "sunlight glinting" as separate items).
+6. All descriptions MUST be in English only. Chinese or other languages are not accepted.
 {ordering_rule}
 
 ## Output Format Example:

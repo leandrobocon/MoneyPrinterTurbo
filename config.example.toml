@@ -75,7 +75,7 @@ tls_verify = true
 # "openai_image" generates one image per script keyword through any
 # OpenAI-compatible /images/generations endpoint (local ComfyUI/SD gateways
 # or cloud relays) and renders it into a video clip.
-video_source = "pexels"
+video_source = "comfyui_wan"
 
 # API key lists support key rotation. Use straight ASCII double quotes and
 # separate multiple keys with commas, for example: ["key-1", "key-2"].
@@ -210,7 +210,7 @@ openai_image_prompt_template = ""
 # ComfyUI local material source ("comfyui_wan" / "comfyui_image").
 # Points directly to a local or remote ComfyUI instance (default: http://127.0.0.1:8188).
 comfyui_base_url = "http://127.0.0.1:8188"
-comfyui_wan_model = "wan2.1_t2v_1.3B_bf16.safetensors"
+comfyui_wan_model = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
 comfyui_qwen_model = "z_image_turbo_bf16.safetensors"
 comfyui_qwen_clip = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
 comfyui_qwen_vae = "qwen_image_vae.safetensors"
@@ -689,7 +689,7 @@ open_task_folder_on_completion = true
 # subtitle_enabled = true
 # subtitle_display_mode = "sentence" # "sentence" or "word_by_word"
 # subtitle_animation = "none"        # "none" or "pop_spring"
-# font_name = "MicrosoftYaHeiBold.ttc"
+# font_name = "Arial.ttf"
 # font_size = 60
 # text_fore_color = "#FFFFFF"
 # stroke_color = "#000000"

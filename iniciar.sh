@@ -9,8 +9,9 @@ echo "======================================================"
 
 # 1. Verifica/Inicia o ComfyUI Server (porta 8188)
 if ! lsof -i :8188 >/dev/null 2>&1; then
-    echo "⚙️  Iniciando ComfyUI Server em segundo plano..."
-    /Users/leandrobocon/ComfyUI-Installs/ComfyUI/ComfyUI/.venv/bin/python /Users/leandrobocon/ComfyUI-Installs/ComfyUI/ComfyUI/main.py --listen 127.0.0.1 --port 8188 > /dev/null 2>&1 &
+    echo "⚙️  Iniciando ComfyUI Server em segundo plano (otimizado para Mac MPS / lowvram)..."
+    export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
+    /Users/leandrobocon/ComfyUI-Installs/ComfyUI/ComfyUI/.venv/bin/python /Users/leandrobocon/ComfyUI-Installs/ComfyUI/ComfyUI/main.py --listen 127.0.0.1 --port 8188 --lowvram > /dev/null 2>&1 &
     sleep 3
 else
     echo "✅ ComfyUI Server já está ativo (porta 8188)."

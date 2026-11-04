@@ -95,7 +95,7 @@ class VideoParams(BaseModel):
       "video_aspect": "横屏 16:9（西瓜视频）",
       "voice_name": "女生-晓晓",
       "bgm_name": "random",
-      "font_name": "STHeitiMedium 黑体-中",
+      "font_name": "Arial.ttf",
       "text_color": "#FFFFFF",
       "font_size": 60,
       "stroke_color": "#000000",
@@ -110,10 +110,15 @@ class VideoParams(BaseModel):
     video_fit_mode: VideoFitMode = VideoFitMode.cover
     video_concat_mode: Optional[VideoConcatMode] = VideoConcatMode.random.value
     video_transition_mode: Optional[VideoTransitionMode] = None
-    video_clip_duration: int = Field(default=5, ge=1)
+    video_clip_duration: int = Field(default=6, ge=1)
     video_clip_speed: Optional[float] = 1.0
     match_materials_to_script: bool = False
     video_count: int = Field(default=1, ge=1)
+
+    channel_bumper_enabled: bool = False  # Whether to attach opening and ending videos
+    channel_bumper_folder: str = "/Users/leandrobocon/Projects/cadernoanimado"
+    opening_video: Optional[str] = None  # Intro video clip to prepend
+    ending_video: Optional[str] = None  # Outro video clip to append
 
     video_source: Optional[str] = "pexels"
     video_materials: Optional[List[MaterialInfo]] = (
@@ -147,7 +152,7 @@ class VideoParams(BaseModel):
         "subtitle_animation", _SUBTITLE_ANIMATIONS, "none"
     )
     custom_position: float = config.ui.get("custom_position", 70.0)
-    font_name: Optional[str] = "STHeitiMedium.ttc"
+    font_name: Optional[str] = "Arial.ttf"
     text_fore_color: Optional[str] = "#FFFFFF"
     text_background_color: Union[bool, str] = False
     rounded_subtitle_background: bool = False
@@ -177,7 +182,7 @@ class SubtitleRequest(BaseModel):
     subtitle_animation: SubtitleAnimation = _get_valid_ui_choice(
         "subtitle_animation", _SUBTITLE_ANIMATIONS, "none"
     )
-    font_name: Optional[str] = "STHeitiMedium.ttc"
+    font_name: Optional[str] = "Arial.ttf"
     text_fore_color: Optional[str] = "#FFFFFF"
     text_background_color: Union[bool, str] = False
     rounded_subtitle_background: bool = False
