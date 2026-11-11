@@ -18,6 +18,7 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8188"
 DEFAULT_WAN_MODEL = "wan2.1_t2v_1.3B_bf16.safetensors"
 DEFAULT_CLIP_NAME = "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
 DEFAULT_VAE_NAME = "wan_2.1_vae.safetensors"
+DEFAULT_MINIMAX_RESOLUTION = "768x448"
 DEFAULT_STEPS = 12
 DEFAULT_CFG = 4.0
 DEFAULT_FPS = 16
@@ -452,14 +453,39 @@ def build_qwen_image_workflow(
 
 
 def _minimax_resolution_for_aspect(aspect: VideoAspect) -> tuple[int, int]:
-    """Return compact dimensions for MiniMax H3 to ensure fast generation on Mac MPS."""
+    """
+    Return dimensions for MiniMax H3.
+    Defaults to 768x448 (um pouco maior e bem mais nítido que 576x320, mantendo boa velocidade no Mac MPS).
+    """
+    res_setting = str(
+        config.app.get("comfyui_minimax_resolution", DEFAULT_MINIMAX_RESOLUTION)
+        or DEFAULT_MINIMAX_RESOLUTION
+    ).strip().lower()
+
+    if res_setting in ("832x480", "480p"):
+        w, h = 832, 480
+    elif res_setting in ("576x320", "320p"):
+        w, h = 576, 320
+    elif "x" in res_setting:
+        try:
+            parts = res_setting.split("x")
+            rw, rh = int(parts[0].strip()), int(parts[1].strip())
+            w = max(32, (rw // 32) * 32)
+            h = max(32, (rh // 32) * 32)
+        except Exception:
+            w, h = 768, 448
+    else:
+        w, h = 768, 448
+
     if aspect == VideoAspect.landscape:
-        return 576, 320
+        return max(w, h), min(w, h)
     elif aspect == VideoAspect.portrait:
-        return 320, 576
+        return min(w, h), max(w, h)
     elif aspect == VideoAspect.square:
-        return 448, 448
-    return 576, 320
+        side = min(max(w, h), 512)
+        side = max(32, (side // 32) * 32)
+        return side, side
+    return max(w, h), min(w, h)
 
 
 def _calculate_minimax_frame_count(duration_seconds: int, fps: int = 24) -> int:
@@ -496,6 +522,13 @@ def generate_video(
 
     current_model = _wan_model()
     is_minimax = "minimax" in current_model.lower()
+
+    import sys
+    if sys.platform == "darwin" and ("fp8" in current_model.lower() or "14b" in current_model.lower()):
+        raise ComfyUIError(
+            f"O modelo '{current_model}' (Float8/FP8) não é suportado pelo PyTorch no Apple Silicon / Metal (MPS backend). "
+            f"No macOS, utilize o modelo 'MiniMax H3 Local' (int8 turbo) ou 'Wan 2.1 1.3B' (bf16)."
+        )
 
     if is_minimax:
         mm_fps = 24

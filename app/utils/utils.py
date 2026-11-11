@@ -864,3 +864,181 @@ def parse_scene_prompts(text: str | list | None) -> list[str]:
     return prompts
 
 
+def extract_scene_timestamps(text: str | list | None) -> list[float] | None:
+    """
+    Extrai durações de cenas (em segundos) a partir de timestamps no texto bruto, se existirem.
+    Reconhece formatos como:
+      - 'Cena 1 (0:00 - 0:25): ...' -> 25.0s
+      - 'Cena 2 [00:25 - 01:00]: ...' -> 35.0s
+      - 'Cena 3 (20s): ...' -> 20.0s
+    Retorna None se nenhum timestamp estruturado for encontrado.
+    """
+    if not text:
+        return None
+
+    if isinstance(text, (list, tuple)):
+        text = "\n".join(str(t).strip() for t in text if str(t).strip())
+
+    text = str(text).strip()
+    if not text:
+        return None
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    interval_regex = re.compile(
+        r"[\(\[\{]?\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*(?:-|–|—|a|à|to)\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*[\)\]\}]?",
+        re.IGNORECASE,
+    )
+    duration_regex = re.compile(
+        r"[\(\[\{]?\s*(\d+(?:\.\d+)?)\s*(?:s|seg|segundos|seconds)\s*[\)\]\}]?",
+        re.IGNORECASE,
+    )
+
+    def _parse_time(time_str: str) -> float:
+        parts = [float(x) for x in time_str.split(":")]
+        if len(parts) == 3:
+            return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        if len(parts) == 2:
+            return parts[0] * 60 + parts[1]
+        return float(parts[0])
+
+    durations: list[float] = []
+    for line in lines:
+        m_int = interval_regex.search(line)
+        if m_int:
+            t_start = _parse_time(m_int.group(1))
+            t_end = _parse_time(m_int.group(2))
+            durations.append(max(1.0, t_end - t_start))
+            continue
+        m_dur = duration_regex.search(line)
+        if m_dur:
+            durations.append(max(1.0, float(m_dur.group(1))))
+
+    return durations if durations else None
+
+
+def compute_content_scene_durations(
+    script: str,
+    num_scenes: int,
+    audio_duration: float,
+    subtitle_path: str | None = None,
+) -> list[float]:
+    """
+    Calcula dinamicamente a duração ideal de cada cena a partir do conteúdo do roteiro e áudio.
+    1. Se houver legendas SRT disponíveis, usa as marcações temporais das falas.
+    2. Se a quantidade de parágrafos bater com num_scenes, aloca proporcionalmente por parágrafo.
+    3. Caso contrário, particiona o roteiro por frases preservando os limites semânticos.
+    4. Fallback uniforme se não houver roteiro.
+    """
+    if num_scenes <= 0 or audio_duration <= 0:
+        return []
+    if num_scenes == 1:
+        return [audio_duration]
+
+    clean_script = str(script or "").strip()
+    if not clean_script:
+        return [audio_duration / num_scenes] * num_scenes
+
+    # 1. Se houver SRT, tentar extrair blocos de legendas
+    if subtitle_path and os.path.isfile(subtitle_path):
+        try:
+            srt_blocks = []
+            time_regex = re.compile(
+                r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})"
+            )
+            with open(subtitle_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            for chunk in content.split("\n\n"):
+                lines = [l.strip() for l in chunk.splitlines() if l.strip()]
+                if len(lines) >= 3 and time_regex.search(lines[1]):
+                    m = time_regex.search(lines[1])
+                    t_start = (
+                        int(m.group(1)) * 3600
+                        + int(m.group(2)) * 60
+                        + int(m.group(3))
+                        + int(m.group(4)) / 1000.0
+                    )
+                    t_end = (
+                        int(m.group(5)) * 3600
+                        + int(m.group(6)) * 60
+                        + int(m.group(7))
+                        + int(m.group(8)) / 1000.0
+                    )
+                    text = " ".join(lines[2:])
+                    srt_blocks.append((t_start, t_end, text))
+
+            if len(srt_blocks) >= num_scenes:
+                total_srt_chars = sum(len(b[2]) for b in srt_blocks)
+                if total_srt_chars > 0:
+                    target_cum = [
+                        (i + 1) * total_srt_chars / num_scenes
+                        for i in range(num_scenes)
+                    ]
+                    cut_times = []
+                    cur_chars = 0
+                    cur_scene = 0
+                    for i, (t_start, t_end, txt) in enumerate(srt_blocks):
+                        cur_chars += len(txt)
+                        if cur_scene < num_scenes - 1:
+                            rem_blocks = len(srt_blocks) - (i + 1)
+                            rem_scenes = (num_scenes - 1) - cur_scene
+                            if rem_blocks >= rem_scenes and cur_chars >= target_cum[cur_scene]:
+                                cut_times.append(t_end)
+                                cur_scene += 1
+                    cut_times.append(audio_duration)
+                    if len(cut_times) == num_scenes:
+                        durations = []
+                        last_t = 0.0
+                        for ct in cut_times:
+                            durations.append(max(1.0, ct - last_t))
+                            last_t = ct
+                        total_d = sum(durations)
+                        scale = audio_duration / total_d
+                        return [d * scale for d in durations]
+        except Exception as exc:
+            logger.warning(f"Failed to extract scene timings from SRT: {exc}")
+
+    # 2. Se a quantidade de parágrafos corresponder exatamente ao número de cenas
+    paragraphs = [p.strip() for p in clean_script.split("\n\n") if p.strip()]
+    if len(paragraphs) == num_scenes:
+        total_p_chars = sum(len(p) for p in paragraphs)
+        if total_p_chars > 0:
+            return [len(p) / total_p_chars * audio_duration for p in paragraphs]
+
+    # 3. Particionamento por frases respeitando limites naturais de oração
+    sentences = [
+        s.strip()
+        for s in re.split(r"(?<=[.!?\n])\s+", clean_script)
+        if s.strip()
+    ]
+    if len(sentences) >= num_scenes:
+        total_chars = sum(len(s) for s in sentences)
+        if total_chars > 0:
+            target_cum_chars = [
+                (i + 1) * total_chars / num_scenes for i in range(num_scenes)
+            ]
+            scene_chars = [0] * num_scenes
+            cur_scene = 0
+            cur_chars = 0
+            for i, s in enumerate(sentences):
+                scene_chars[cur_scene] += len(s)
+                cur_chars += len(s)
+                if cur_scene < num_scenes - 1:
+                    rem_sentences = len(sentences) - (i + 1)
+                    rem_scenes = (num_scenes - 1) - cur_scene
+                    if rem_sentences >= rem_scenes:
+                        target = target_cum_chars[cur_scene]
+                        next_len = len(sentences[min(i + 1, len(sentences) - 1)])
+                        if cur_chars >= target or (target - cur_chars) < next_len / 2:
+                            cur_scene += 1
+
+            return [c / total_chars * audio_duration for c in scene_chars]
+
+    # 4. Fallback uniforme
+    return [audio_duration / num_scenes] * num_scenes
+
+
+
+

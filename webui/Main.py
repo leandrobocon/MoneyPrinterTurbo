@@ -4239,6 +4239,23 @@ def _render_material_provider_settings(provider):
         )
         _set_runtime_config("app", "comfyui_wan_model", comfyui_wan_model.strip())
 
+        mm_res_list = ["768x448", "832x480", "576x320"]
+        current_mm_res_cfg = str(app_settings.get("comfyui_minimax_resolution", "768x448") or "768x448").strip()
+        comfyui_minimax_res = st.selectbox(
+            "Resolução MiniMax H3 Local",
+            options=mm_res_list,
+            index=mm_res_list.index(current_mm_res_cfg) if current_mm_res_cfg in mm_res_list else 0,
+            key="comfyui_minimax_resolution_advanced_input",
+            on_change=_save_settings_change,
+            args=(
+                "app",
+                "comfyui_minimax_resolution",
+                "comfyui_minimax_resolution_advanced_input",
+                lambda value: str(value).strip(),
+            ),
+        )
+        _set_runtime_config("app", "comfyui_minimax_resolution", comfyui_minimax_res)
+
         comfyui_steps = st.number_input(
             "Steps (Passos)",
             value=int(app_settings.get("comfyui_steps", 8)),
@@ -6218,8 +6235,8 @@ def _render_video_settings(panel, params):
                 )
                 wan_options = [
                     ("minimax_h3_fl2va_pruned_int8_convrot.safetensors", "MiniMax H3 Local (Otimizado Mac MPS / Turbo LoRA)"),
-                    ("wan2.1_t2v_1.3B_bf16.safetensors", "Wan 2.1 1.3B (Ultra Rápido ~2.8 min)"),
-                    ("wan2.1_t2v_14B_fp8_e4m3fn.safetensors", "Wan 2.1 14B (Alta Qualidade / Mais Lento)"),
+                    ("wan2.1_t2v_1.3B_bf16.safetensors", "Wan 2.1 1.3B (Ultra Rápido ~2.8 min / bf16)"),
+                    ("wan2.1_t2v_14B_fp8_e4m3fn.safetensors", "Wan 2.1 14B (Apenas GPU Nvidia / Incompatível com Mac MPS - Float8)"),
                 ]
                 wan_model_idx = 0
                 for idx, (m_id, _) in enumerate(wan_options):
@@ -6235,7 +6252,30 @@ def _render_video_settings(panel, params):
                 )
                 _set_runtime_config("app", "comfyui_wan_model", selected_wan_model)
                 if "minimax" in selected_wan_model.lower():
-                    st.caption("Gera clipes de vídeo localmente no ComfyUI via MiniMax H3 (resolução adaptada e Turbo LoRA).")
+                    mm_res_options = [
+                        ("768x448", "768x448 (Recomendado - Boa Qualidade / Nítido)"),
+                        ("832x480", "832x480 (480p - Alta Resolução)"),
+                        ("576x320", "576x320 (Rápido / Baixa Resolução)"),
+                    ]
+                    current_mm_res = str(
+                        config.app.get("comfyui_minimax_resolution", "768x448") or "768x448"
+                    ).strip()
+                    mm_res_idx = 0
+                    for idx, (r_id, _) in enumerate(mm_res_options):
+                        if r_id == current_mm_res:
+                            mm_res_idx = idx
+                            break
+                    selected_mm_res = st.selectbox(
+                        "Resolução MiniMax Local",
+                        options=[opt[0] for opt in mm_res_options],
+                        index=mm_res_idx,
+                        format_func=lambda x: dict(mm_res_options).get(x, x),
+                        key="comfyui_minimax_resolution_select",
+                    )
+                    _set_runtime_config("app", "comfyui_minimax_resolution", selected_mm_res)
+                    st.caption(f"Gera clipes de vídeo localmente no ComfyUI via MiniMax H3 ({selected_mm_res} com Turbo LoRA).")
+                elif "14b" in selected_wan_model.lower() or "fp8" in selected_wan_model.lower():
+                    st.warning("⚠️ **Atenção (Mac MPS)**: O modelo Wan 2.1 14B FP8 não funciona no Apple Silicon porque o PyTorch MPS não suporta tipos Float8. Para gerar vídeos no Mac, utilize **MiniMax H3 Local** ou **Wan 2.1 1.3B**.")
                 else:
                     st.caption("Gera clipes de vídeo localmente no ComfyUI via Wan 2.1 Text-to-Video.")
 

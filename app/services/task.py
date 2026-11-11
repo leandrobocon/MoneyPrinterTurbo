@@ -1145,6 +1145,14 @@ def generate_final_videos(
     else:
         video_concat_mode = VideoConcatMode.random
     video_transition_mode = params.video_transition_mode
+    scene_target_durations = utils.extract_scene_timestamps(params.video_terms)
+    if not scene_target_durations and downloaded_videos:
+        scene_target_durations = utils.compute_content_scene_durations(
+            script=getattr(params, "video_script", "") or "",
+            num_scenes=len(downloaded_videos),
+            audio_duration=audio_duration,
+            subtitle_path=subtitle_path,
+        )
 
     _progress = 50
     for i in range(params.video_count):
@@ -1181,6 +1189,8 @@ def generate_final_videos(
             progress_callback=_stage_progress_reporter(
                 task_id, _progress, _progress + combine_share
             ),
+            scene_target_durations=scene_target_durations,
+            match_materials_to_script=params.match_materials_to_script,
             **batch_options,
         )
         if allocate_batch_materials:

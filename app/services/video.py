@@ -973,6 +973,78 @@ def _fit_clip_to_canvas(
     ).with_duration(clip.duration)
 
 
+def _generate_clip_variant(
+    source_clip_path: str,
+    variant_type: str,
+    output_dir: str,
+    threads: int = 2,
+) -> str:
+    """
+    Generate a dynamic perspective variation of an already-rendered clip file using FFmpeg.
+    Supported variants:
+      - 'reverse': Play backwards (ping-pong effect).
+      - 'zoom': 1.25x scale punch-in (centered crop) to provide a close-up perspective.
+      - 'reverse_zoom': Reverse playback with 1.25x punch-in zoom.
+      - 'zoom_upper': 1.25x scale punch-in offset towards top third (focus on subject/characters).
+    """
+    if variant_type == "reverse":
+        vf = "reverse"
+    elif variant_type == "zoom":
+        vf = "scale=1.25*iw:-2,crop=trunc(iw/1.25/2)*2:trunc(ih/1.25/2)*2:(in_w-out_w)/2:(in_h-out_h)/2"
+    elif variant_type == "reverse_zoom":
+        vf = "reverse,scale=1.25*iw:-2,crop=trunc(iw/1.25/2)*2:trunc(ih/1.25/2)*2:(in_w-out_w)/2:(in_h-out_h)/2"
+    elif variant_type == "zoom_upper":
+        vf = "scale=1.25*iw:-2,crop=trunc(iw/1.25/2)*2:trunc(ih/1.25/2)*2:(in_w-out_w)/2:(in_h-out_h)/3"
+    else:
+        return source_clip_path
+
+    descriptor, variant_path = tempfile.mkstemp(
+        prefix=f"temp-variant-{variant_type}-",
+        suffix=".mp4",
+        dir=output_dir or None,
+    )
+    os.close(descriptor)
+
+    cmd = [
+        utils.get_ffmpeg_binary(),
+        "-nostdin",
+        "-y",
+        "-i",
+        source_clip_path,
+        "-vf",
+        vf,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-pix_fmt",
+        "yuv420p",
+        "-threads",
+        str(threads or 2),
+        "-an",
+        variant_path,
+    ]
+    try:
+        subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        return variant_path
+    except Exception as exc:
+        logger.warning(
+            f"failed to generate clip variant '{variant_type}' for {source_clip_path}: {exc}, "
+            "falling back to original clip"
+        )
+        if os.path.exists(variant_path):
+            try:
+                os.remove(variant_path)
+            except OSError:
+                pass
+        return source_clip_path
+
+
 def combine_videos(
     combined_video_path: str,
     video_paths: List[str],
@@ -988,6 +1060,8 @@ def combine_videos(
     source_groups: dict[str, str] | None = None,
     used_video_paths: List[str] | None = None,
     progress_callback: Callable[[float], None] | None = None,
+    scene_target_durations: List[float] | None = None,
+    match_materials_to_script: bool = False,
 ) -> str:
     # Direct callers and persisted tasks can still supply the raw string.
     # Normalize it once for all downstream enum access.
@@ -1250,16 +1324,121 @@ def combine_videos(
             f"({required_video_duration:.2f}s), looping clips to match audio length."
         )
         base_clips = processed_clips.copy()
-        for clip in itertools.cycle(base_clips):
-            if video_duration >= required_video_duration:
-                break
-            processed_clips.append(clip)
-            video_duration += clip.duration
-        logger.info(
-            f"video duration: {video_duration:.2f}s, audio duration: {audio_duration:.2f}s, "
-            f"required duration: {required_video_duration:.2f}s, "
-            f"looped {len(processed_clips)-len(base_clips)} clips"
+        is_sequential = (
+            video_concat_mode.value == VideoConcatMode.sequential.value
+            or match_materials_to_script
         )
+        variant_cache: dict[tuple[str, str], str] = {}
+        variant_types = ["reverse", "zoom", "reverse_zoom", "zoom_upper"]
+
+        if is_sequential and base_clips:
+            # Group base clips by scene (by source_file_path preserving order)
+            scene_groups: list[list[SubClippedVideoClip]] = []
+            seen_sources: dict[str, int] = {}
+            for clip in base_clips:
+                src = clip.source_file_path
+                if src not in seen_sources:
+                    seen_sources[src] = len(scene_groups)
+                    scene_groups.append([])
+                scene_groups[seen_sources[src]].append(clip)
+
+            num_scenes = len(scene_groups)
+            if num_scenes > 0:
+                if (
+                    scene_target_durations
+                    and len(scene_target_durations) == num_scenes
+                    and sum(scene_target_durations) > 0
+                ):
+                    raw_sum = sum(scene_target_durations)
+                    scale = required_video_duration / raw_sum
+                    scaled_durations = [d * scale for d in scene_target_durations]
+                    target_ends = list(itertools.accumulate(scaled_durations))
+                else:
+                    target_ends = [
+                        (s + 1) * required_video_duration / num_scenes
+                        for s in range(num_scenes)
+                    ]
+                target_ends[-1] = required_video_duration
+
+                expanded_clips: list[SubClippedVideoClip] = []
+                cur_time = 0.0
+
+                for s in range(num_scenes):
+                    s_target = target_ends[s]
+                    s_clips = scene_groups[s]
+
+                    # 1. Add base clip(s) for this scene (Repetition 0: original forward)
+                    for clip in s_clips:
+                        expanded_clips.append(clip)
+                        cur_time += clip.duration
+
+                    # 2. If cur_time is less than s_target, repeat clips with perspective variations
+                    rep_idx = 0
+                    while (
+                        (s < num_scenes - 1 and (s_target - cur_time) > (s_clips[0].duration * 0.3))
+                        or (s == num_scenes - 1 and cur_time < required_video_duration)
+                    ):
+                        base_clip = s_clips[rep_idx % len(s_clips)]
+                        rep_number = (rep_idx // len(s_clips)) + 1
+                        variant_type = variant_types[(rep_number - 1) % len(variant_types)]
+                        cache_key = (base_clip.file_path, variant_type)
+                        if cache_key not in variant_cache:
+                            variant_cache[cache_key] = _generate_clip_variant(
+                                source_clip_path=base_clip.file_path,
+                                variant_type=variant_type,
+                                output_dir=output_dir,
+                                threads=threads,
+                            )
+                        var_path = variant_cache[cache_key]
+                        var_clip = SubClippedVideoClip(
+                            file_path=var_path,
+                            duration=base_clip.duration,
+                            width=base_clip.width,
+                            height=base_clip.height,
+                            source_file_path=base_clip.source_file_path,
+                        )
+                        expanded_clips.append(var_clip)
+                        cur_time += var_clip.duration
+                        rep_idx += 1
+
+                processed_clips = expanded_clips
+                video_duration = cur_time
+                logger.info(
+                    f"Sequential scene expansion: {num_scenes} scenes expanded into "
+                    f"{len(processed_clips)} clips covering {video_duration:.2f}s "
+                    f"with reverse and zoom perspective variations."
+                )
+        else:
+            rep_idx = 0
+            for clip in itertools.cycle(base_clips):
+                if video_duration >= required_video_duration:
+                    break
+                rep_number = (rep_idx // len(base_clips)) + 1
+                variant_type = variant_types[(rep_number - 1) % len(variant_types)]
+                cache_key = (clip.file_path, variant_type)
+                if cache_key not in variant_cache:
+                    variant_cache[cache_key] = _generate_clip_variant(
+                        source_clip_path=clip.file_path,
+                        variant_type=variant_type,
+                        output_dir=output_dir,
+                        threads=threads,
+                    )
+                var_path = variant_cache[cache_key]
+                var_clip = SubClippedVideoClip(
+                    file_path=var_path,
+                    duration=clip.duration,
+                    width=clip.width,
+                    height=clip.height,
+                    source_file_path=clip.source_file_path,
+                )
+                processed_clips.append(var_clip)
+                video_duration += var_clip.duration
+                rep_idx += 1
+            logger.info(
+                f"video duration: {video_duration:.2f}s, audio duration: {audio_duration:.2f}s, "
+                f"required duration: {required_video_duration:.2f}s, "
+                f"looped {len(processed_clips)-len(base_clips)} clips with variations"
+            )
      
     # merge video clips progressively, avoid loading all videos at once to avoid memory overflow
     logger.info("starting clip merging process")
@@ -2006,17 +2185,37 @@ def attach_intro_outro(
     except Exception:
         target_w, target_h = 1920, 1080
 
-    cmd = [ffmpeg_bin, "-y"]
+    cmd = [ffmpeg_bin, "-y", "-nostdin"]
     filter_complex_parts = []
     concat_inputs = []
+
+    def _file_has_audio(file_p: str) -> bool:
+        try:
+            p = subprocess.run(
+                [ffmpeg_bin, "-nostdin", "-i", file_p],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return "Audio:" in p.stderr
+        except Exception:
+            return False
 
     for idx, fpath in enumerate(inputs):
         cmd.extend(["-i", fpath])
         filter_complex_parts.append(
             f"[{idx}:v]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
             f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{idx}];"
-            f"[{idx}:a]aformat=sample_rates=44100:channel_layouts=stereo[a{idx}];"
         )
+        if _file_has_audio(fpath):
+            filter_complex_parts.append(
+                f"[{idx}:a]aformat=sample_rates=44100:channel_layouts=stereo[a{idx}];"
+            )
+        else:
+            filter_complex_parts.append(
+                f"anullsrc=channel_layout=stereo:sample_rate=44100[a{idx}];"
+            )
         concat_inputs.append(f"[v{idx}][a{idx}]")
 
     concat_chain = "".join(concat_inputs)
@@ -2033,7 +2232,7 @@ def attach_intro_outro(
     ])
 
     logger.info(f"attaching intro/outro: opening={opening_exists}, ending={ending_exists} -> {temp_output}")
-    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    res = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
     if res.returncode == 0 and os.path.isfile(temp_output):
         if output_path == main_video_path:
             os.replace(temp_output, main_video_path)

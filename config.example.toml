@@ -238,6 +238,7 @@ openai_image_prompt_template = ""
 # Points directly to a local or remote ComfyUI instance (default: http://127.0.0.1:8188).
 comfyui_base_url = "http://127.0.0.1:8188"
 comfyui_wan_model = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+comfyui_minimax_resolution = "768x448"
 comfyui_qwen_model = "z_image_turbo_bf16.safetensors"
 comfyui_qwen_clip = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
 comfyui_qwen_vae = "qwen_image_vae.safetensors"

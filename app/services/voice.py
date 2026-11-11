@@ -36,7 +36,7 @@ from app.utils import utils
 from app.utils.subtitle_reader import moviepy_subtitles
 from app.utils.subtitle_writer import staged_subtitle_file
 
-_DEFAULT_EDGE_TTS_TIMEOUT_SECONDS = 30.0
+_DEFAULT_EDGE_TTS_TIMEOUT_SECONDS = 120.0
 _SILICONFLOW_TTS_TIMEOUT_SECONDS = (10, 300)  # connect, read
 _MIMO_DEFAULT_BASE_URL = "https://api.xiaomimimo.com/v1"
 _MIMO_DEFAULT_TTS_MODEL = "mimo-v2.5-tts"
@@ -1516,6 +1516,8 @@ def _stream_edge_tts_sync_with_timeout(
             _wake_producer()
             if item_type == "chunk":
                 on_chunk(payload)
+                # Reset deadline on chunk received so long active streams are not aborted
+                deadline = time.monotonic() + timeout_seconds
             elif item_type == "error":
                 raise payload
             elif item_type == "done":
