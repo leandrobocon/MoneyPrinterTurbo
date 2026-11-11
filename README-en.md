@@ -14,9 +14,34 @@ Provide a video <b>topic</b> or <b>keyword</b>, and MoneyPrinterTurbo will gener
 <a href="https://trendshift.io/repositories/8731" target="_blank"><img src="https://trendshift.io/api/badge/repositories/8731" alt="harry0703%2FMoneyPrinterTurbo | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 <a href="https://www.star-history.com/harry0703/moneyprinterturbo"><img src="https://api.star-history.com/badge?repo=harry0703/MoneyPrinterTurbo" alt="Star History Rank" style="height: 55px;" height="55"/></a>
 
-English | [简体中文](README.md) | [日本語](README-ja.md) | [Releases](https://github.com/harry0703/MoneyPrinterTurbo/releases) | [Issues](https://github.com/harry0703/MoneyPrinterTurbo/issues)
+[Português](README.md) | English | [Original Repository (Upstream)](https://github.com/harry0703/MoneyPrinterTurbo)
 
 </div>
+
+## 🚀 Enhancements in this Fork
+
+This repository introduces narrative synchronization, dynamic visual variety, and optimizations for Apple Silicon (Mac MPS):
+
+### 1. 🎯 Content-Based Scene Synchronization
+- **Dynamic Content Timing:** The duration of each scene is dynamically calculated from the actual spoken audio and subtitle timestamps (`compute_content_scene_durations`).
+- **Narrative Alignment:** In long-form videos, each visual scene stays on screen for the exact duration its topic is discussed, eliminating timeline drift and out-of-order scene loops.
+- **Timestamp Parsing:** Supports explicit timestamps in prompts (e.g. `Cena 1 (0:00 - 0:25): ...`) or automatic sentence/paragraph balancing.
+
+### 2. 🎬 Dynamic Scene Repetitions (Reverse & Zoom Perspectives)
+When a scene's speaking duration exceeds the generated video clip duration:
+- **1st Repetition (Reverse / Ping-Pong):** Smoothly plays backwards from the end frame, maintaining action continuity without abrupt cuts.
+- **2nd Repetition (Focal Zoom / Punch-In 1.25x):** Center/upper-third close-up creates a distinct camera perspective of the same action.
+- **Subsequent Repetitions:** Alternates reverse zoom and varied framing for continuous visual interest throughout narration.
+
+### 3. ⚡ Local MiniMax H3 & ComfyUI Optimization (Apple Silicon / Mac MPS)
+- **Resolution Selector in WebUI:** Choose between `768x448` (crisp default), `832x480` (480p), and `576x320`.
+- **Float8 Safety Check:** Proactively prevents unsupported FP8/Float8 models (e.g., Wan 14B) on macOS MPS, guiding users to optimized models (MiniMax H3 int8 or Wan 1.3B bf16).
+
+### 4. 🔊 Edge TTS & Bumper Mix Stability
+- **Long-Audio Streaming:** Extended timeout with per-chunk deadline refresh prevents timeouts during long scripts.
+- **Bumper Audio Handling:** Automatic fallback silent audio track (`anullsrc`) when attaching opening/ending bumpers without native audio.
+
+---
 
 ## Screenshots 🖥️
 
@@ -38,7 +63,7 @@ English | [简体中文](README.md) | [日本語](README-ja.md) | [Releases](htt
 
 Thanks to [Kimi](https://platform.kimi.ai?track_id=track-9e3b711aa2594e378f6fe5b8de718a76&aff=moneyprinterturbo) for sponsoring this project! [Kimi K3.1 Pro](https://www.kimi.com/blog/kimi-k3?aff=moneyprinterturbo) is Moonshot AI's most capable 3T-class open-weight model to date. With native vision and a 1-million-token context window, K3.1 Pro delivers frontier performance across knowledge work, reasoning, and long-horizon tasks. Within MoneyPrinterTurbo, K3.1 Pro powers video creation by writing scripts and extracting the search keywords that determine the final footage—the better it understands the content, the more relevant the results.
 
-**Exclusive offer for MoneyPrinterTurbo users: new users who register through the dedicated link receive bonus API credit equal to 10% of their first successful top-up. The offer ends December 31, 2026. Visit the Kimi Open Platform ([中文站](https://platform.kimi.com?track_id=track-6eec1e56a4494e52adcaebbcbbefce59&aff=moneyprinterturbo) | [Global](https://platform.kimi.ai?track_id=track-9e3b711aa2594e378f6fe5b8de718a76&aff=moneyprinterturbo)) to try the API.**
+**Exclusive offer for MoneyPrinterTurbo users: new users who register through the dedicated link receive bonus API credit equal to 10% of their first successful top-up. The offer ends December 31, 2026. Visit the Kimi Open Platform ([Regional](https://platform.kimi.com?track_id=track-6eec1e56a4494e52adcaebbcbbefce59&aff=moneyprinterturbo) | [Global](https://platform.kimi.ai?track_id=track-9e3b711aa2594e378f6fe5b8de718a76&aff=moneyprinterturbo)) to try the API.**
 
 <br>
 <table align="center">
